@@ -1,31 +1,31 @@
-use std::sync::Arc;
-use std::time::Instant;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         State,
     },
-    http::StatusCode,
     response::{Html, IntoResponse},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
-use glam::{Mat4, Vec3};
+use glam::{Mat4, Quat, Vec3};
 use openh264::{
     encoder::{Encoder, EncoderConfig, FrameType},
     formats::YUVBuffer,
     OpenH264API,
 };
-use scene::Scene as SceneDoc;
-use serde::Deserialize;
+use scene::{Camera as SceneCamera, Projection as SceneProjection, Scene as SceneDoc};
+use serde::Serialize;
 use shinra_engine::{
     engine::Engine,
     mesh::Mesh,
-    scene::{orbit_eye, Camera, Projection, Scene as EngineScene},
+    scene::{Camera as EngineCamera, Projection as EngineProjection, Scene as EngineScene},
 };
-use tokio::sync::{watch, RwLock};
+use tokio::sync::watch;
 
 const WIDTH: u32 = 512;
 const HEIGHT: u32 = 384;
@@ -34,31 +34,107 @@ const HEIGHT: u32 = 384;
 type Frame = Arc<(bool, Vec<u8>)>;
 
 #[derive(Clone)]
+struct GameSlot {
+    name: String,
+    dir: PathBuf,
+}
+
+struct GameState {
+    games: Vec<GameSlot>,
+    index: usize,
+    scene: SceneDoc,
+    camera: SceneCamera,
+}
+
+#[derive(Serialize)]
+struct GameInfo {
+    name: String,
+    index: usize,
+    total: usize,
+}
+
+#[derive(Clone)]
 struct AppState {
     frame_rx: watch::Receiver<Frame>,
-    scene: Arc<RwLock<SceneDoc>>,
+    game: Arc<RwLock<GameState>>,
+}
+
+fn load_game(slot: &GameSlot) -> Result<(SceneDoc, SceneCamera)> {
+    let scene_path = slot.dir.join("scene.ron");
+    let cam_path = slot.dir.join("tscn.ron");
+    let scene_str = std::fs::read_to_string(&scene_path)
+        .with_context(|| format!("read {}", scene_path.display()))?;
+    let scene: SceneDoc = ron::from_str(&scene_str)
+        .with_context(|| format!("parse {}", scene_path.display()))?;
+    let cam_str = std::fs::read_to_string(&cam_path)
+        .with_context(|| format!("read {}", cam_path.display()))?;
+    let camera: SceneCamera = ron::from_str(&cam_str)
+        .with_context(|| format!("parse {}", cam_path.display()))?;
+    Ok((scene, camera))
+}
+
+fn scan_games(dir: &str) -> Result<Vec<GameSlot>> {
+    let mut out = Vec::new();
+    for entry in std::fs::read_dir(dir).with_context(|| format!("scan {dir}"))? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if !path.join("scene.ron").exists() {
+            continue;
+        }
+        out.push(GameSlot {
+            name: entry.file_name().to_string_lossy().into_owned(),
+            dir: path,
+        });
+    }
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let games_dir = std::env::var("GAMES_DIR").unwrap_or_else(|_| "assets/games".into());
+    let games = scan_games(&games_dir)?;
+    if games.is_empty() {
+        anyhow::bail!("no games found under {games_dir} (expected gameN/scene.ron)");
+    }
+    println!(
+        "editor-server: found {} game(s): {}",
+        games.len(),
+        games
+            .iter()
+            .map(|g| g.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let (scene, camera) = load_game(&games[0])?;
+    println!("editor-server: starting on game '{}'", games[0].name);
+
     let initial: Frame = Arc::new((true, Vec::new()));
     let (frame_tx, frame_rx) = watch::channel(initial);
 
-    // wgpu is not Send across all backends — render on a dedicated OS thread.
+    let game = Arc::new(RwLock::new(GameState {
+        games,
+        index: 0,
+        scene,
+        camera,
+    }));
+
+    let game_for_render = Arc::clone(&game);
     std::thread::spawn(move || {
-        if let Err(e) = render_loop(frame_tx) {
+        if let Err(e) = render_loop(frame_tx, game_for_render) {
             eprintln!("render_loop: {e}");
         }
     });
 
-    let scene = Arc::new(RwLock::new(SceneDoc::default()));
-    let state = AppState { frame_rx, scene };
+    let state = AppState { frame_rx, game };
 
     let http_app = Router::new()
         .route("/", get(index_html))
-        .route("/scene", get(get_scene).post(post_scene))
-        .route("/scene/save", post(save_scene))
-        .route("/scene/load", post(load_scene))
+        .route("/scene", get(get_scene))
+        .route("/game", get(get_game))
         .with_state(state.clone());
 
     let ws_app = Router::new()
@@ -78,9 +154,93 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Convert RGBA pixels to a YUV I420 `YUVBuffer`.
-///
-/// Packs planes as [Y…][U…][V…] matching openh264's `from_vec` layout.
+fn to_engine_camera(cam: &SceneCamera) -> EngineCamera {
+    let projection = match &cam.projection {
+        SceneProjection::Perspective {
+            fov_y_degrees,
+            aspect,
+            znear,
+            zfar,
+        } => EngineProjection::Perspective {
+            fov_y_radians: fov_y_degrees.to_radians(),
+            aspect: *aspect,
+            znear: *znear,
+            zfar: *zfar,
+        },
+        SceneProjection::Orthographic {
+            half_height,
+            aspect,
+            znear,
+            zfar,
+        } => EngineProjection::Orthographic {
+            half_height: *half_height,
+            aspect: *aspect,
+            znear: *znear,
+            zfar: *zfar,
+        },
+    };
+    EngineCamera {
+        eye: Vec3::from(cam.eye),
+        target: Vec3::from(cam.target),
+        up: Vec3::from(cam.up),
+        projection,
+    }
+}
+
+fn build_engine_scene(
+    doc: &SceneDoc,
+    camera: &SceneCamera,
+    mesh_cache: &mut HashMap<String, Arc<Mesh>>,
+    quad_mesh: &mut Option<Arc<Mesh>>,
+) -> EngineScene {
+    let mut sc = EngineScene::new(to_engine_camera(camera));
+
+    for node in &doc.nodes {
+        if let Some(tilemap) = &node.tilemap {
+            if quad_mesh.is_none() {
+                match Mesh::from_obj_file("assets/quad.obj") {
+                    Ok(m) => *quad_mesh = Some(Arc::new(m)),
+                    Err(e) => eprintln!(
+                        "editor-server: assets/quad.obj missing — tilemaps not rendered: {e}"
+                    ),
+                }
+            }
+            if let Some(quad) = quad_mesh.as_ref() {
+                for cell in &tilemap.cells {
+                    let model = Mat4::from_translation(Vec3::new(
+                        cell.x as f32 * tilemap.tile_size[0],
+                        0.0,
+                        cell.y as f32 * tilemap.tile_size[1],
+                    ));
+                    sc.spawn_mesh(Arc::clone(quad), model);
+                }
+            }
+        }
+
+        if let Some(mesh_ref) = &node.mesh {
+            if !mesh_cache.contains_key(&mesh_ref.path) {
+                match Mesh::from_obj_file(&mesh_ref.path) {
+                    Ok(m) => {
+                        mesh_cache.insert(mesh_ref.path.clone(), Arc::new(m));
+                    }
+                    Err(e) => eprintln!("editor-server: cannot load {}: {e}", mesh_ref.path),
+                }
+            }
+            if let Some(mesh) = mesh_cache.get(&mesh_ref.path) {
+                let t = &node.transform;
+                let model = Mat4::from_scale_rotation_translation(
+                    Vec3::from(t.scale),
+                    Quat::from_array(t.rotation),
+                    Vec3::from(t.translation),
+                );
+                sc.spawn_mesh(Arc::clone(mesh), model);
+            }
+        }
+    }
+
+    sc
+}
+
 fn rgba_to_yuv(pixels: &[u8], width: u32, height: u32) -> YUVBuffer {
     let w = width as usize;
     let h = height as usize;
@@ -110,12 +270,9 @@ fn rgba_to_yuv(pixels: &[u8], width: u32, height: u32) -> YUVBuffer {
     YUVBuffer::from_vec(yuv, w, h)
 }
 
-fn render_loop(tx: watch::Sender<Frame>) -> Result<()> {
+fn render_loop(tx: watch::Sender<Frame>, game: Arc<RwLock<GameState>>) -> Result<()> {
     let mut engine = Engine::new(WIDTH, HEIGHT);
 
-    let bunny: Arc<Mesh> = Arc::new(Mesh::from_obj_file("assets/bunny.obj")?);
-
-    // Persistent readback buffer (CPU-visible, aligned rows).
     let unpadded_bpr = WIDTH * 4;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let pad_bpr = unpadded_bpr.div_ceil(align) * align;
@@ -131,35 +288,21 @@ fn render_loop(tx: watch::Sender<Frame>) -> Result<()> {
         .max_frame_rate(30.0);
     let mut encoder = Encoder::with_api_config(OpenH264API::from_source(), config)?;
 
-    let start = Instant::now();
+    let mut mesh_cache: HashMap<String, Arc<Mesh>> = HashMap::new();
+    let mut quad_mesh: Option<Arc<Mesh>> = None;
     let mut frame_idx: u32 = 0;
 
     loop {
-        let t = start.elapsed().as_secs_f32();
-
-        // Force a keyframe every ~1s so newly-connected WS clients can sync
-        // (watch::channel retains only the latest frame).
         if frame_idx % 30 == 0 {
             encoder.force_intra_frame();
         }
 
-        let camera = Camera {
-            eye: orbit_eye(t * 0.5, 3.0, 1.5),
-            target: Vec3::ZERO,
-            up: Vec3::Y,
-            projection: Projection::Perspective {
-                fov_y_radians: std::f32::consts::PI / 3.0,
-                aspect: WIDTH as f32 / HEIGHT as f32,
-                znear: 0.1,
-                zfar: 100.0,
-            },
+        let scene = {
+            let g = game.read().unwrap();
+            build_engine_scene(&g.scene, &g.camera, &mut mesh_cache, &mut quad_mesh)
         };
-
-        let mut scene = EngineScene::new(camera);
-        scene.spawn_mesh(bunny.clone(), Mat4::IDENTITY);
         engine.render(&scene);
 
-        // GPU → CPU readback.
         let mut enc_cmd = engine
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -203,7 +346,6 @@ fn render_loop(tx: watch::Sender<Frame>) -> Result<()> {
         };
         readback.unmap();
 
-        // RGBA → YUV I420 → H.264 annexb.
         let yuv = rgba_to_yuv(&pixels, WIDTH, HEIGHT);
         let bitstream = encoder.encode(&yuv)?;
         let is_key = matches!(bitstream.frame_type(), FrameType::IDR | FrameType::I);
@@ -212,51 +354,21 @@ fn render_loop(tx: watch::Sender<Frame>) -> Result<()> {
         let _ = tx.send(Arc::new((is_key, h264_bytes)));
         frame_idx = frame_idx.wrapping_add(1);
 
-        // ~30 fps cap.
         std::thread::sleep(std::time::Duration::from_millis(33));
     }
 }
 
-#[derive(Deserialize)]
-struct PathRequest {
-    path: String,
-}
-
-async fn save_scene(
-    State(state): State<AppState>,
-    Json(req): Json<PathRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let scene = state.scene.read().await.clone();
-    let ron_str = ron::ser::to_string_pretty(&scene, Default::default())
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    if let Some(parent) = std::path::Path::new(&req.path).parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    }
-    std::fs::write(&req.path, ron_str)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-async fn load_scene(
-    State(state): State<AppState>,
-    Json(req): Json<PathRequest>,
-) -> Result<StatusCode, (StatusCode, String)> {
-    let ron_str =
-        std::fs::read_to_string(&req.path).map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))?;
-    let scene: SceneDoc =
-        ron::from_str(&ron_str).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
-    *state.scene.write().await = scene;
-    Ok(StatusCode::NO_CONTENT)
-}
-
 async fn get_scene(State(state): State<AppState>) -> Json<SceneDoc> {
-    Json(state.scene.read().await.clone())
+    Json(state.game.read().unwrap().scene.clone())
 }
 
-async fn post_scene(State(state): State<AppState>, Json(new_scene): Json<SceneDoc>) -> StatusCode {
-    *state.scene.write().await = new_scene;
-    StatusCode::NO_CONTENT
+async fn get_game(State(state): State<AppState>) -> Json<GameInfo> {
+    let g = state.game.read().unwrap();
+    Json(GameInfo {
+        name: g.games[g.index].name.clone(),
+        index: g.index,
+        total: g.games.len(),
+    })
 }
 
 async fn index_html() -> Html<&'static str> {
@@ -264,8 +376,9 @@ async fn index_html() -> Html<&'static str> {
         r#"<!doctype html>
 <html>
 <head><title>shinra editor</title></head>
-<body style="margin:0;background:#111">
+<body style="margin:0;background:#111;color:#888;font-family:monospace">
   <canvas id="c" width="512" height="384" style="display:block;width:100%;height:auto"></canvas>
+  <p style="padding:6px">arrow keys: move object &middot; n: next game</p>
   <script>
     const canvas = document.getElementById('c');
     const ctx = canvas.getContext('2d');
@@ -278,6 +391,7 @@ async fn index_html() -> Html<&'static str> {
     const ws = new WebSocket('ws://localhost:5813/ws');
     ws.binaryType = 'arraybuffer';
     ws.onmessage = ({ data }) => {
+      if (typeof data === 'string') return;
       const buf = new Uint8Array(data);
       const isKey = buf[0] === 1;
       if (!synced && !isKey) return;
@@ -288,6 +402,11 @@ async fn index_html() -> Html<&'static str> {
         data: buf.subarray(1),
       }));
     };
+    document.addEventListener('keydown', e => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'keydown', key: e.key }));
+      }
+    });
   </script>
 </body>
 </html>"#,
@@ -295,27 +414,84 @@ async fn index_html() -> Html<&'static str> {
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_ws(socket, state.frame_rx))
+    ws.on_upgrade(|socket| handle_ws(socket, state))
 }
 
-async fn handle_ws(mut socket: WebSocket, mut frame_rx: watch::Receiver<Frame>) {
+async fn handle_ws(mut socket: WebSocket, state: AppState) {
+    let mut frame_rx = state.frame_rx.clone();
     loop {
-        if frame_rx.changed().await.is_err() {
-            break;
+        tokio::select! {
+            r = frame_rx.changed() => {
+                if r.is_err() { break; }
+                let frame = frame_rx.borrow_and_update().clone();
+                let (is_key, h264) = frame.as_ref();
+                if h264.is_empty() { continue; }
+                let mut msg = Vec::with_capacity(1 + h264.len());
+                msg.push(*is_key as u8);
+                msg.extend_from_slice(h264);
+                if socket.send(Message::Binary(msg)).await.is_err() { break; }
+            }
+            inbound = socket.recv() => {
+                match inbound {
+                    Some(Ok(Message::Text(t))) => handle_input(&t, &state.game),
+                    Some(Ok(_)) => {}
+                    _ => break,
+                }
+            }
         }
-        let frame = frame_rx.borrow_and_update().clone();
-        let (is_key, h264) = frame.as_ref();
+    }
+}
 
-        if h264.is_empty() {
-            continue;
+fn handle_input(text: &str, game: &Arc<RwLock<GameState>>) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
+        return;
+    };
+    if v.get("type").and_then(|t| t.as_str()) != Some("keydown") {
+        return;
+    }
+    let key = v.get("key").and_then(|k| k.as_str()).unwrap_or("");
+
+    let mut g = game.write().unwrap();
+
+    match key {
+        "n" | "N" => {
+            if g.games.len() < 2 {
+                return;
+            }
+            let next = (g.index + 1) % g.games.len();
+            let slot = g.games[next].clone();
+            match load_game(&slot) {
+                Ok((scene, camera)) => {
+                    g.index = next;
+                    g.scene = scene;
+                    g.camera = camera;
+                    println!("editor-server: switched to game '{}'", slot.name);
+                }
+                Err(e) => eprintln!("editor-server: failed to load game '{}': {e}", slot.name),
+            }
         }
-
-        let mut msg = Vec::with_capacity(1 + h264.len());
-        msg.push(*is_key as u8);
-        msg.extend_from_slice(h264);
-
-        if socket.send(Message::Binary(msg)).await.is_err() {
-            break;
+        "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" => {
+            // Per-press translation step is 5% of camera-to-target distance,
+            // so movement feels consistent across scenes at very different scales
+            // (bunny ~0.1m, teapot ~1m).
+            let cam = &g.camera;
+            let dist = ((cam.eye[0] - cam.target[0]).powi(2)
+                + (cam.eye[1] - cam.target[1]).powi(2)
+                + (cam.eye[2] - cam.target[2]).powi(2))
+            .sqrt();
+            let d = dist * 0.05;
+            let (dx, dy) = match key {
+                "ArrowLeft" => (-d, 0.0),
+                "ArrowRight" => (d, 0.0),
+                "ArrowUp" => (0.0, d),
+                "ArrowDown" => (0.0, -d),
+                _ => (0.0, 0.0),
+            };
+            if let Some(node) = g.scene.nodes.first_mut() {
+                node.transform.translation[0] += dx;
+                node.transform.translation[1] += dy;
+            }
         }
+        _ => {}
     }
 }

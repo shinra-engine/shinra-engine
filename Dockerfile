@@ -1,32 +1,29 @@
-# ---- build stage ----
-FROM rust:1.78-bookworm AS builder
+# Dev-mode image: keeps the full Rust toolchain inside the container so the
+# editor-server is built (and re-built) from source mounted at /engine-core.
+# Use Dockerfile.release for a slim multi-stage runtime image.
+# Rust MSRV is set by Cargo.lock — wgpu 27 needs 1.88, getrandom needs
+# edition 2024 (stabilized in 1.85). 1.88-bookworm covers both.
+FROM rust:1.88-bookworm
 
+# - cmake / nasm / pkg-config: openh264 source build (transitive dep)
+# - mesa-vulkan-drivers / libvulkan1: software Vulkan (lavapipe) so wgpu
+#   renders without a physical GPU
 RUN apt-get update && apt-get install -y --no-install-recommends \
     cmake \
     nasm \
     pkg-config \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /build
-COPY . .
-
-RUN cargo build -p editor-server --release
-
-# ---- runtime stage ----
-FROM debian:bookworm-slim AS runtime
-
-# mesa-vulkan-drivers provides llvmpipe (software Vulkan) so wgpu can render
-# headlessly without a physical GPU.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    libstdc++6 \
     mesa-vulkan-drivers \
     libvulkan1 \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/editor-server /usr/local/bin/editor-server
+# /engine-core (source) and /game (project) are bind-mounted at runtime.
+# The editor-server resolves asset paths relative to its current directory.
+WORKDIR /game
 
 EXPOSE 5812
 EXPOSE 5813
 
-CMD ["editor-server"]
+# cargo builds into /engine-core/target/ on the bind mount, so the build
+# persists across `docker compose up`. First build is slow; subsequent ones
+# only touch crates whose source actually changed.
+CMD ["cargo", "run", "--release", "--manifest-path", "/engine-core/Cargo.toml", "-p", "editor-server"]

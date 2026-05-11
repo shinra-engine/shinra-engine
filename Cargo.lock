@@ -926,6 +926,7 @@ dependencies = [
  "ron",
  "scene",
  "serde",
+ "serde_json",
  "shinra-engine",
  "tokio",
  "wgpu",

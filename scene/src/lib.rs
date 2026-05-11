@@ -88,6 +88,33 @@ pub enum ComponentValue {
     PlayerControlled,
 }
 
+/// Top-level type stored in `tscn.ron` — describes the camera the editor /
+/// runner should use when rendering a scene. Fields mirror the engine's
+/// `Camera`/`Projection` but are serde-friendly (f32 arrays, degrees).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Camera {
+    pub eye: [f32; 3],
+    pub target: [f32; 3],
+    pub up: [f32; 3],
+    pub projection: Projection,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Projection {
+    Perspective {
+        fov_y_degrees: f32,
+        aspect: f32,
+        znear: f32,
+        zfar: f32,
+    },
+    Orthographic {
+        half_height: f32,
+        aspect: f32,
+        znear: f32,
+        zfar: f32,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

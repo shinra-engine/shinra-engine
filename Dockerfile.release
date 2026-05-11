@@ -1,0 +1,38 @@
+# ---- build stage ----
+# Rust MSRV is set by Cargo.lock — wgpu 27 needs 1.88, getrandom needs
+# edition 2024 (stabilized in 1.85). 1.88-bookworm covers both.
+FROM rust:1.88-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake \
+    nasm \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+RUN cargo build -p editor-server --release
+
+# ---- runtime stage ----
+FROM debian:bookworm-slim AS runtime
+
+# mesa-vulkan-drivers provides llvmpipe (software Vulkan) so wgpu can render
+# headlessly without a physical GPU.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libstdc++6 \
+    mesa-vulkan-drivers \
+    libvulkan1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/target/release/editor-server /usr/local/bin/editor-server
+
+# Game project gets bind-mounted here. The editor-server resolves asset paths
+# (e.g. assets/bunny.obj) relative to its current working directory.
+WORKDIR /game
+
+EXPOSE 5812
+EXPOSE 5813
+
+CMD ["editor-server"]

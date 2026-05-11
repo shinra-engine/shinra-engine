@@ -59,6 +59,33 @@ cargo run -p runner                # cycles libgame*.so in target/debug
 cargo run -p editor-server         # HTTP :5812 + WS :5813 (H.264 stream)
 ```
 
+## Build the editor-server Docker image
+
+The headless `editor-server` is the entry point for VS Code's viewport. Game
+projects launch it via their own `docker-compose.yml` (which bind-mounts the
+project as `/game` and this repo as `/engine-core`).
+
+Two images are available:
+
+- **`Dockerfile`** (dev) — keeps the full Rust toolchain inside the container.
+  `cargo run -p editor-server` runs at container start against the source
+  mounted at `/engine-core`, so engine edits rebuild on `docker compose up`
+  without rebuilding the image. Use this for engine development.
+  ```bash
+  docker build -t shinra-editor-server .
+  ```
+- **`Dockerfile.release`** (slim) — multi-stage build that bakes the
+  release binary into a `debian:bookworm-slim` runtime. Smaller image, faster
+  start, but engine source changes require an image rebuild.
+  ```bash
+  docker build -f Dockerfile.release -t shinra-editor-server .
+  ```
+
+Both produce an image at `WORKDIR /game` with software-Vulkan (lavapipe)
+preinstalled so it renders without a physical GPU. The
+`shinra-examples/docker-compose.yml` references the image by name and works
+with either build.
+
 ### VS Code extension (live viewport)
 
 `editor-server` exposes the rendered scene as an H.264 WebSocket stream that the
