@@ -1,0 +1,20 @@
+[package]
+name = "editor"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "editor"
+path = "src/main.rs"
+
+[dependencies]
+egui          = "0.33"
+eframe        = { version = "0.33", default-features = false, features = ["wgpu", "default_fonts", "wayland", "x11"] }
+egui_dock     = "0.18"
+egui-wgpu     = "0.33"
+shinra-engine = { path = "../engine" }
+scene         = { path = "../scene" }
+wgpu          = "27"
+glam          = "0.28"
+ron           = "0.10"
+rfd           = "0.15"

@@ -1,0 +1,16 @@
+[package]
+name = "runner"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "runner"
+path = "src/main.rs"
+
+[dependencies]
+shinra-engine = { path = "../engine" }
+gametok-abi   = { path = "../abi" }
+libloading    = "0.8"
+crossterm     = "0.27"
+glam          = "0.28"
+anyhow        = "1"

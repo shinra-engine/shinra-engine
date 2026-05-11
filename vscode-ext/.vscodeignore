@@ -1,0 +1,7 @@
+src/**
+e2e/**
+node_modules/**
+.gitignore
+tsconfig.json
+playwright.config.ts
+out/**/*.map
