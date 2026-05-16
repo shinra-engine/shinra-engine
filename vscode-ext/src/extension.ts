@@ -2,7 +2,8 @@ import * as http from 'http';
 import * as vscode from 'vscode';
 
 const HTTP_PORT = 5812;
-const WS_PORT = 5813;
+const GAME_WS_PORT = 5813;
+const EDITOR_WS_PORT = 5814;
 
 // ---- scene types mirroring scene/src/lib.rs --------------------------------
 
@@ -232,8 +233,11 @@ export function activate(ctx: vscode.ExtensionContext): void {
         }),
         vscode.window.registerWebviewViewProvider(InspectorViewProvider.viewType, inspectorProvider),
         vscode.commands.registerCommand('shinra.refreshScene', () => sceneProvider.refresh()),
-        vscode.commands.registerCommand('shinra.openViewport', () => {
-            ViewportPanel.createOrShow();
+        vscode.commands.registerCommand('shinra.openGameViewport', () => {
+            ViewportPanel.createOrShow('shinraViewportGame', 'Shinra Viewport: Gaming', GAME_WS_PORT);
+        }),
+        vscode.commands.registerCommand('shinra.openEditorViewport', () => {
+            ViewportPanel.createOrShow('shinraViewportEditor', 'Shinra Viewport: Editor', EDITOR_WS_PORT);
         }),
         vscode.commands.registerCommand('shinra.saveScene', async () => {
             const path = await vscode.window.showInputBox({
@@ -260,44 +264,44 @@ export function deactivate(): void {}
 // ---- viewport panel --------------------------------------------------------
 
 class ViewportPanel {
-    static readonly viewType = 'shinraViewport';
-    private static instance: ViewportPanel | undefined;
+    private static instances = new Map<string, ViewportPanel>();
 
     private readonly panel: vscode.WebviewPanel;
 
-    private constructor() {
+    private constructor(viewType: string, title: string, wsPort: number) {
         this.panel = vscode.window.createWebviewPanel(
-            ViewportPanel.viewType,
-            'Shinra Viewport',
+            viewType,
+            title,
             vscode.ViewColumn.One,
             {
                 enableScripts: true,
                 retainContextWhenHidden: true,
             }
         );
-        this.panel.webview.html = buildViewportHtml();
+        this.panel.webview.html = buildViewportHtml(wsPort);
         this.panel.onDidDispose(() => {
-            ViewportPanel.instance = undefined;
+            ViewportPanel.instances.delete(viewType);
         });
     }
 
-    static createOrShow(): void {
-        if (ViewportPanel.instance) {
-            ViewportPanel.instance.panel.reveal(vscode.ViewColumn.One);
+    static createOrShow(viewType: string, title: string, wsPort: number): void {
+        const existing = ViewportPanel.instances.get(viewType);
+        if (existing) {
+            existing.panel.reveal(vscode.ViewColumn.One);
         } else {
-            ViewportPanel.instance = new ViewportPanel();
+            ViewportPanel.instances.set(viewType, new ViewportPanel(viewType, title, wsPort));
         }
     }
 }
 
-function buildViewportHtml(): string {
+function buildViewportHtml(wsPort: number): string {
     return `<!doctype html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="
     default-src 'none';
-    connect-src ws://localhost:${WS_PORT};
+    connect-src ws://localhost:${wsPort};
     style-src 'unsafe-inline';
     script-src 'unsafe-inline';
   ">
@@ -328,9 +332,9 @@ function buildViewportHtml(): string {
     let synced = false;
     let ws;
     function connectWs() {
-      ws = new WebSocket('ws://localhost:${WS_PORT}/ws');
+      ws = new WebSocket('ws://localhost:${wsPort}/ws');
       ws.binaryType = 'arraybuffer';
-      ws.onopen = () => { statusbar.textContent = 'connected  |  run: cargo run -p editor-server'; };
+      ws.onopen = () => { statusbar.textContent = 'connected  |  port ${wsPort}'; };
       ws.onclose = () => {
         synced = false;
         statusbar.textContent = 'ws disconnected — retrying in 2s…';

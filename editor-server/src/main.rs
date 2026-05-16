@@ -43,7 +43,6 @@ struct GameState {
     games: Vec<GameSlot>,
     index: usize,
     scene: SceneDoc,
-    camera: SceneCamera,
 }
 
 #[derive(Serialize)]
@@ -55,22 +54,17 @@ struct GameInfo {
 
 #[derive(Clone)]
 struct AppState {
-    frame_rx: watch::Receiver<Frame>,
+    game_frame_rx: watch::Receiver<Frame>,
+    editor_frame_rx: watch::Receiver<Frame>,
     game: Arc<RwLock<GameState>>,
 }
 
-fn load_game(slot: &GameSlot) -> Result<(SceneDoc, SceneCamera)> {
-    let scene_path = slot.dir.join("scene.ron");
-    let cam_path = slot.dir.join("tscn.ron");
-    let scene_str = std::fs::read_to_string(&scene_path)
-        .with_context(|| format!("read {}", scene_path.display()))?;
-    let scene: SceneDoc = ron::from_str(&scene_str)
-        .with_context(|| format!("parse {}", scene_path.display()))?;
-    let cam_str = std::fs::read_to_string(&cam_path)
-        .with_context(|| format!("read {}", cam_path.display()))?;
-    let camera: SceneCamera = ron::from_str(&cam_str)
-        .with_context(|| format!("parse {}", cam_path.display()))?;
-    Ok((scene, camera))
+fn load_game(slot: &GameSlot) -> Result<SceneDoc> {
+    let path = slot.dir.join("scene.ron");
+    let s = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let scene: SceneDoc =
+        ron::from_str(&s).with_context(|| format!("parse {}", path.display()))?;
+    Ok(scene)
 }
 
 fn scan_games(dir: &str) -> Result<Vec<GameSlot>> {
@@ -109,27 +103,44 @@ async fn main() -> Result<()> {
             .collect::<Vec<_>>()
             .join(", ")
     );
-    let (scene, camera) = load_game(&games[0])?;
+    let scene = load_game(&games[0])?;
     println!("editor-server: starting on game '{}'", games[0].name);
 
-    let initial: Frame = Arc::new((true, Vec::new()));
-    let (frame_tx, frame_rx) = watch::channel(initial);
+    let blank: Frame = Arc::new((true, Vec::new()));
+    let (game_frame_tx, game_frame_rx) = watch::channel(blank.clone());
+    let (editor_frame_tx, editor_frame_rx) = watch::channel(blank);
 
     let game = Arc::new(RwLock::new(GameState {
         games,
         index: 0,
         scene,
-        camera,
     }));
 
-    let game_for_render = Arc::clone(&game);
-    std::thread::spawn(move || {
-        if let Err(e) = render_loop(frame_tx, game_for_render) {
-            eprintln!("render_loop: {e}");
-        }
-    });
+    // Game render thread — uses each scene's own camera (or the fallback).
+    {
+        let g = Arc::clone(&game);
+        std::thread::spawn(move || {
+            if let Err(e) = render_loop(game_frame_tx, g, CameraSource::FromScene) {
+                eprintln!("game render_loop: {e}");
+            }
+        });
+    }
 
-    let state = AppState { frame_rx, game };
+    // Editor render thread — uses a fixed perspective overview camera.
+    {
+        let g = Arc::clone(&game);
+        std::thread::spawn(move || {
+            if let Err(e) = render_loop(editor_frame_tx, g, CameraSource::Editor) {
+                eprintln!("editor render_loop: {e}");
+            }
+        });
+    }
+
+    let state = AppState {
+        game_frame_rx,
+        editor_frame_rx,
+        game,
+    };
 
     let http_app = Router::new()
         .route("/", get(index_html))
@@ -137,21 +148,65 @@ async fn main() -> Result<()> {
         .route("/game", get(get_game))
         .with_state(state.clone());
 
-    let ws_app = Router::new()
-        .route("/ws", get(ws_handler))
+    let game_ws_app = Router::new()
+        .route("/ws", get(ws_handler_game))
+        .with_state(state.clone());
+
+    let editor_ws_app = Router::new()
+        .route("/ws", get(ws_handler_editor))
         .with_state(state.clone());
 
     let http_listener = tokio::net::TcpListener::bind("0.0.0.0:5812").await?;
-    let ws_listener = tokio::net::TcpListener::bind("0.0.0.0:5813").await?;
+    let game_listener = tokio::net::TcpListener::bind("0.0.0.0:5813").await?;
+    let editor_listener = tokio::net::TcpListener::bind("0.0.0.0:5814").await?;
 
-    println!("editor-server: HTTP :5812  WS :5813");
+    println!("editor-server: HTTP :5812  GAME WS :5813  EDITOR WS :5814");
 
     tokio::select! {
-        r = axum::serve(http_listener, http_app) => r?,
-        r = axum::serve(ws_listener, ws_app) => r?,
+        r = axum::serve(http_listener,   http_app)        => r?,
+        r = axum::serve(game_listener,   game_ws_app)     => r?,
+        r = axum::serve(editor_listener, editor_ws_app)   => r?,
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+enum CameraSource {
+    FromScene,
+    Editor,
+}
+
+/// Default camera used when the scene has no camera set.
+fn fallback_scene_camera() -> SceneCamera {
+    SceneCamera {
+        eye: [3.0, 3.0, 3.0],
+        target: [0.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        projection: SceneProjection::Perspective {
+            fov_y_degrees: 60.0,
+            aspect: WIDTH as f32 / HEIGHT as f32,
+            znear: 0.1,
+            zfar: 100.0,
+        },
+    }
+}
+
+/// Fixed editor overview camera. Independent of the game's camera so the
+/// editor viewport always shows a consistent vantage no matter what the
+/// scene declares.
+fn editor_camera() -> SceneCamera {
+    SceneCamera {
+        eye: [3.0, 3.0, 3.0],
+        target: [0.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        projection: SceneProjection::Perspective {
+            fov_y_degrees: 50.0,
+            aspect: WIDTH as f32 / HEIGHT as f32,
+            znear: 0.05,
+            zfar: 100.0,
+        },
+    }
 }
 
 fn to_engine_camera(cam: &SceneCamera) -> EngineCamera {
@@ -270,7 +325,11 @@ fn rgba_to_yuv(pixels: &[u8], width: u32, height: u32) -> YUVBuffer {
     YUVBuffer::from_vec(yuv, w, h)
 }
 
-fn render_loop(tx: watch::Sender<Frame>, game: Arc<RwLock<GameState>>) -> Result<()> {
+fn render_loop(
+    tx: watch::Sender<Frame>,
+    game: Arc<RwLock<GameState>>,
+    cam_src: CameraSource,
+) -> Result<()> {
     let mut engine = Engine::new(WIDTH, HEIGHT);
 
     let unpadded_bpr = WIDTH * 4;
@@ -292,6 +351,9 @@ fn render_loop(tx: watch::Sender<Frame>, game: Arc<RwLock<GameState>>) -> Result
     let mut quad_mesh: Option<Arc<Mesh>> = None;
     let mut frame_idx: u32 = 0;
 
+    let editor_cam = editor_camera();
+    let fallback_cam = fallback_scene_camera();
+
     loop {
         if frame_idx % 30 == 0 {
             encoder.force_intra_frame();
@@ -299,7 +361,11 @@ fn render_loop(tx: watch::Sender<Frame>, game: Arc<RwLock<GameState>>) -> Result
 
         let scene = {
             let g = game.read().unwrap();
-            build_engine_scene(&g.scene, &g.camera, &mut mesh_cache, &mut quad_mesh)
+            let cam = match cam_src {
+                CameraSource::Editor => &editor_cam,
+                CameraSource::FromScene => g.scene.camera.as_ref().unwrap_or(&fallback_cam),
+            };
+            build_engine_scene(&g.scene, cam, &mut mesh_cache, &mut quad_mesh)
         };
         engine.render(&scene);
 
@@ -377,34 +443,47 @@ async fn index_html() -> Html<&'static str> {
 <html>
 <head><title>shinra editor</title></head>
 <body style="margin:0;background:#111;color:#888;font-family:monospace">
-  <canvas id="c" width="512" height="384" style="display:block;width:100%;height:auto"></canvas>
+  <div style="display:flex;gap:8px;padding:8px">
+    <div>
+      <p>game viewport (5813)</p>
+      <canvas id="g" width="512" height="384" style="display:block"></canvas>
+    </div>
+    <div>
+      <p>editor viewport (5814)</p>
+      <canvas id="e" width="512" height="384" style="display:block"></canvas>
+    </div>
+  </div>
   <p style="padding:6px">arrow keys: move object &middot; n: next game</p>
   <script>
-    const canvas = document.getElementById('c');
-    const ctx = canvas.getContext('2d');
-    const decoder = new VideoDecoder({
-      output(frame) { ctx.drawImage(frame, 0, 0); frame.close(); },
-      error(e) { console.warn('decoder:', e); },
-    });
-    decoder.configure({ codec: 'avc1.42E01E', codedWidth: 512, codedHeight: 384 });
-    let synced = false;
-    const ws = new WebSocket('ws://localhost:5813/ws');
-    ws.binaryType = 'arraybuffer';
-    ws.onmessage = ({ data }) => {
-      if (typeof data === 'string') return;
-      const buf = new Uint8Array(data);
-      const isKey = buf[0] === 1;
-      if (!synced && !isKey) return;
-      synced = true;
-      decoder.decode(new EncodedVideoChunk({
-        type: isKey ? 'key' : 'delta',
-        timestamp: performance.now() * 1000,
-        data: buf.subarray(1),
-      }));
-    };
+    function attach(canvasId, port) {
+      const ctx = document.getElementById(canvasId).getContext('2d');
+      const decoder = new VideoDecoder({
+        output(frame) { ctx.drawImage(frame, 0, 0); frame.close(); },
+        error(e) { console.warn('decoder', port, e); },
+      });
+      decoder.configure({ codec: 'avc1.42E01E', codedWidth: 512, codedHeight: 384 });
+      let synced = false;
+      const ws = new WebSocket(`ws://localhost:${port}/ws`);
+      ws.binaryType = 'arraybuffer';
+      ws.onmessage = ({ data }) => {
+        if (typeof data === 'string') return;
+        const buf = new Uint8Array(data);
+        const isKey = buf[0] === 1;
+        if (!synced && !isKey) return;
+        synced = true;
+        decoder.decode(new EncodedVideoChunk({
+          type: isKey ? 'key' : 'delta',
+          timestamp: performance.now() * 1000,
+          data: buf.subarray(1),
+        }));
+      };
+      return ws;
+    }
+    const wsGame = attach('g', 5813);
+    attach('e', 5814);
     document.addEventListener('keydown', e => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'keydown', key: e.key }));
+      if (wsGame.readyState === WebSocket.OPEN) {
+        wsGame.send(JSON.stringify({ type: 'keydown', key: e.key }));
       }
     });
   </script>
@@ -413,12 +492,20 @@ async fn index_html() -> Html<&'static str> {
     )
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(|socket| handle_ws(socket, state))
+async fn ws_handler_game(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+    let rx = state.game_frame_rx.clone();
+    ws.on_upgrade(|socket| handle_ws(socket, state, rx))
 }
 
-async fn handle_ws(mut socket: WebSocket, state: AppState) {
-    let mut frame_rx = state.frame_rx.clone();
+async fn ws_handler_editor(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let rx = state.editor_frame_rx.clone();
+    ws.on_upgrade(|socket| handle_ws(socket, state, rx))
+}
+
+async fn handle_ws(mut socket: WebSocket, state: AppState, mut frame_rx: watch::Receiver<Frame>) {
     loop {
         tokio::select! {
             r = frame_rx.changed() => {
@@ -461,20 +548,20 @@ fn handle_input(text: &str, game: &Arc<RwLock<GameState>>) {
             let next = (g.index + 1) % g.games.len();
             let slot = g.games[next].clone();
             match load_game(&slot) {
-                Ok((scene, camera)) => {
+                Ok(scene) => {
                     g.index = next;
                     g.scene = scene;
-                    g.camera = camera;
                     println!("editor-server: switched to game '{}'", slot.name);
                 }
                 Err(e) => eprintln!("editor-server: failed to load game '{}': {e}", slot.name),
             }
         }
         "ArrowUp" | "ArrowDown" | "ArrowLeft" | "ArrowRight" => {
-            // Per-press translation step is 5% of camera-to-target distance,
-            // so movement feels consistent across scenes at very different scales
-            // (bunny ~0.1m, teapot ~1m).
-            let cam = &g.camera;
+            // Step is 5% of camera-target distance for the SCENE camera (or
+            // the fallback if absent), so movement feels right at the scale
+            // the game itself defines.
+            let fallback = fallback_scene_camera();
+            let cam = g.scene.camera.as_ref().unwrap_or(&fallback);
             let dist = ((cam.eye[0] - cam.target[0]).powi(2)
                 + (cam.eye[1] - cam.target[1]).powi(2)
                 + (cam.eye[2] - cam.target[2]).powi(2))

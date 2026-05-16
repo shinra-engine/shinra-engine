@@ -1,9 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-/// Top-level type stored in `.scn.ron`.
+/// Top-level type stored in `.scn.ron` or `scene.ron`. The optional `camera`
+/// is the game camera the player would see; the editor viewport uses its
+/// own camera and ignores this field.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Scene {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera: Option<Camera>,
     pub nodes: Vec<Node>,
 }
 

@@ -11,8 +11,12 @@
   "contributes": {
     "commands": [
       {
-        "command": "shinra.openViewport",
-        "title": "Shinra: Open Viewport"
+        "command": "shinra.openGameViewport",
+        "title": "Shinra Viewport: Gaming"
+      },
+      {
+        "command": "shinra.openEditorViewport",
+        "title": "Shinra Viewport: Editor"
       },
       {
         "command": "shinra.refreshScene",

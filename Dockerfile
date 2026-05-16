@@ -22,6 +22,7 @@ WORKDIR /game
 
 EXPOSE 5812
 EXPOSE 5813
+EXPOSE 5814
 
 # cargo builds into /engine-core/target/ on the bind mount, so the build
 # persists across `docker compose up`. First build is slow; subsequent ones

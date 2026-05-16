@@ -34,5 +34,6 @@ WORKDIR /game
 
 EXPOSE 5812
 EXPOSE 5813
+EXPOSE 5814
 
 CMD ["editor-server"]
