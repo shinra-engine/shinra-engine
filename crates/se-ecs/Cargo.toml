@@ -1,8 +1,0 @@
-[package]
-name = "se-ecs"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-se-abi.workspace = true
-se-host.workspace = true

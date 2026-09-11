@@ -1734,8 +1734,11 @@ name = "se-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ratatui",
+ "se-abi",
  "se-contract",
  "se-gpu",
+ "se-tui",
  "se-vm",
 ]
 
