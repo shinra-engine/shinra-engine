@@ -9,7 +9,7 @@ use quote::quote;
 use syn::{spanned::Spanned, Data, DeriveInput, Error, Fields, Result, Type};
 
 /// A field flattened to (scalar type, element count).
-fn scalar_of(ty: &Type) -> Result<(TokenStream, u32)> {
+pub(crate) fn scalar_of(ty: &Type) -> Result<(TokenStream, u32)> {
     match ty {
         Type::Path(p) => {
             let ident = p

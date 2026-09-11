@@ -90,10 +90,11 @@ fn se_ortho(half_w : f32, half_h : f32, near : f32, far : f32) -> mat4x4<f32> {
 
 /// Build the full source for one pass.
 pub fn compose(pass: &PassDef, inst: Option<&Instancing>, uni: Option<&Uniform>) -> String {
+    use crate::image_asset::shader_name;
     let mut s = String::with_capacity(HEAD.len() + pass.shader.len() + 512);
     s.push_str(HEAD);
 
-    if !pass.reads.is_empty() {
+    if !pass.reads.is_empty() || !pass.textures.is_empty() {
         s.push_str("@group(1) @binding(0) var se_sampler : sampler;\n");
         for (i, name) in pass.reads.iter().enumerate() {
             // Previous-frame contents, so a pass may name a buffer it writes.
@@ -101,6 +102,15 @@ pub fn compose(pass: &PassDef, inst: Option<&Instancing>, uni: Option<&Uniform>)
                 "@group(1) @binding({}) var {} : texture_2d<f32>;\n",
                 i + 1,
                 name
+            ));
+        }
+        // Asset images follow the buffer reads in the same group, sharing the
+        // one sampler. Named after the asset, minus its extension.
+        for (i, name) in pass.textures.iter().enumerate() {
+            s.push_str(&format!(
+                "@group(1) @binding({}) var {} : texture_2d<f32>;\n",
+                pass.reads.len() + i + 1,
+                shader_name(name)
             ));
         }
     }

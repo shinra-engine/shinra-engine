@@ -1,124 +1,160 @@
-//! `#[se::stage]` — turn a plain function into a queryable stage.
+//! `#[se::stage]` — a function whose parameter list *is* its query.
 //!
-//! The parameter list is the query, so the macro's whole job is to read the
-//! signature and emit a batched `extern "C"` shim around it. Note what it
-//! cannot emit: there is no way to name a component the signature does not,
-//! which is what makes "reaching outside the signature is not expressible"
-//! true rather than aspirational.
+//! The signature is the whole contract. There is no world handle, no command
+//! buffer and no escape hatch: reaching outside the parameters is not
+//! expressible, so single-writer reasoning holds by construction.
+//!
+//! What the attribute emits is two things, and both are data as far as the
+//! host is concerned:
+//!
+//!   * an entry in the `se.stages` custom section, naming the components the
+//!     signature named and whether each is `&` or `&mut`. The host reads it
+//!     without instantiating the module and checks it against `contract.wit`.
+//!   * `se_stage_run__<name>`, the batched loop. The per-row loop runs *here*,
+//!     inside the module, over the host's own columns — so the boundary is
+//!     crossed once per stage, not once per row, and nothing is copied.
+//!
+//! There is no `StageCall` any more. A stage takes no arguments: the column
+//! descriptors are at an address the contract fixed, and how many rows exist
+//! is the pool's length, which a control var asked for.
 
-use proc_macro2::TokenStream;
+use proc_macro2::{Span, TokenStream};
 use quote::{format_ident, quote};
-use syn::{spanned::Spanned, Error, FnArg, ItemFn, Result, Type};
+use syn::{spanned::Spanned, Error, FnArg, Ident, ItemFn, Pat, Result, Type};
 
 enum Binding {
-    /// `&T`
-    Ref(Type),
-    /// `&mut T`
-    Mut(Type),
-    /// `T` by value — only `f32`, meaning dt.
-    Value(Type),
+    Read(Ident),
+    Write(Ident),
+}
+
+impl Binding {
+    fn ty(&self) -> &Ident {
+        match self {
+            Binding::Read(t) | Binding::Write(t) => t,
+        }
+    }
+}
+
+/// `Transform` -> `transform`. WIT spells a record in kebab-case and the
+/// generator snakes it; a Rust type name upper-camels the same word, so the
+/// journey back is one lowercase for a single word and an underscore between
+/// humps for more.
+fn wit_name(ident: &Ident) -> String {
+    let s = ident.to_string();
+    let mut out = String::with_capacity(s.len() + 2);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i != 0 {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
+fn component_of(ty: &Type) -> Result<Ident> {
+    match ty {
+        Type::Path(p) => p
+            .path
+            .get_ident()
+            .cloned()
+            .ok_or_else(|| Error::new(ty.span(), "a stage parameter must be a component type")),
+        _ => Err(Error::new(ty.span(), "a stage parameter must be a component type")),
+    }
 }
 
 fn classify(arg: &FnArg) -> Result<Binding> {
-    let pat = match arg {
-        FnArg::Typed(t) => t,
-        FnArg::Receiver(r) => {
-            return Err(Error::new(r.span(), "a stage is a free function, not a method"))
-        }
+    let FnArg::Typed(t) = arg else {
+        return Err(Error::new(arg.span(), "a stage is a free function; it has no `self`"));
     };
-    Ok(match &*pat.ty {
+    if let Pat::Wild(_) = *t.pat {
+        return Err(Error::new(t.pat.span(), "a stage parameter needs a name"));
+    }
+    match &*t.ty {
         Type::Reference(r) => {
-            let inner = (*r.elem).clone();
-            if r.mutability.is_some() {
-                Binding::Mut(inner)
-            } else {
-                Binding::Ref(inner)
-            }
+            let c = component_of(&r.elem)?;
+            Ok(if r.mutability.is_some() { Binding::Write(c) } else { Binding::Read(c) })
         }
-        other => Binding::Value(other.clone()),
-    })
+        other => Err(Error::new(
+            other.span(),
+            "a stage parameter must be `&Component` or `&mut Component`. Time and input \
+             are control vars now: read them from the arena rather than taking them here.",
+        )),
+    }
 }
 
 pub fn stage(f: ItemFn) -> Result<TokenStream> {
     let name = f.sig.ident.clone();
     let name_str = name.to_string();
-    let modname = format_ident!("__se_stage_{}", name);
-
-    if f.sig.asyncness.is_some() || f.sig.unsafety.is_some() {
+    if f.sig.inputs.is_empty() {
         return Err(Error::new(
             f.sig.span(),
-            "a stage is an ordinary safe function; the host owns scheduling",
-        ));
-    }
-    if !matches!(f.sig.output, syn::ReturnType::Default) {
-        return Err(Error::new(
-            f.sig.output.span(),
-            "a stage writes through its parameters and returns nothing",
+            "a stage's parameter list is its query; one that names nothing would run over nothing",
         ));
     }
 
     let bindings: Vec<Binding> = f.sig.inputs.iter().map(classify).collect::<Result<_>>()?;
-    if bindings.is_empty() {
-        return Err(Error::new(
-            f.sig.span(),
-            "a stage with no parameters has an empty query and nothing to do",
-        ));
-    }
 
-    let mut param_consts = Vec::new();
-    let mut slot_consts = Vec::new();
+    // The declaration, encoded by the same code the host decodes with.
+    let params: Vec<(String, u32)> = bindings
+        .iter()
+        .map(|b| {
+            let access = match b {
+                Binding::Read(_) => se_contract::stages::READ,
+                Binding::Write(_) => se_contract::stages::WRITE,
+            };
+            (wit_name(b.ty()), access)
+        })
+        .collect();
+    let refs: Vec<(&str, u32)> = params.iter().map(|(n, a)| (n.as_str(), *a)).collect();
+    let entry = se_contract::stages::encode(&name_str, &refs);
+    let n_bytes = entry.len();
+    let bytes = entry.iter().map(|b| quote!(#b));
+
+    // Each column is one load through the descriptor the host published, and
+    // the pool it belongs to is a field of that descriptor — so a stage never
+    // needs to be told which pool it runs over.
+    let mut lets = Vec::new();
     let mut args = Vec::new();
-
     for (i, b) in bindings.iter().enumerate() {
-        let ty = match b {
-            Binding::Ref(t) | Binding::Mut(t) | Binding::Value(t) => t,
-        };
-        param_consts.push(match b {
-            Binding::Mut(_) => quote!(<#ty as ::se::StageParam>::PARAM.write()),
-            _ => quote!(<#ty as ::se::StageParam>::PARAM),
-        });
-
-        let slot = format_ident!("SLOT{}", i);
-        slot_consts.push(quote! {
-            const #slot: u32 = ::se::slot_of(&PARAMS, #i);
-        });
-
-        let fetch = quote! { <#ty as ::se::StageParam>::fetch(call, #slot, row) };
+        let c = format_ident!("se_c{i}");
+        let ty = b.ty();
+        let col = Ident::new(&format!("COL_{}", wit_name(ty).to_uppercase()), Span::call_site());
+        lets.push(quote! { let #c = crate::se_col(crate::arena::#col); });
         args.push(match b {
-            Binding::Mut(_) => quote! { &mut *(#fetch as *mut #ty) },
-            Binding::Ref(_) => quote! { &*(#fetch as *const #ty) },
-            Binding::Value(_) => quote! { *(#fetch as *const #ty) },
+            Binding::Read(_) => quote! { &*crate::se_row::<#ty>(&#c, se_i) },
+            Binding::Write(_) => quote! { &mut *crate::se_row::<#ty>(&#c, se_i) },
         });
     }
+    let first = format_ident!("se_c0");
 
-    let n = param_consts.len();
-    let vis = &f.vis;
+    let section = se_contract::stages::SECTION;
+    let decl = format_ident!("SE_STAGE_{}", name_str.to_uppercase());
+    let run = format_ident!("{}{}", se_contract::stages::RUN_PREFIX, name_str);
 
     Ok(quote! {
         #f
 
-        #[doc(hidden)]
-        #vis mod #modname {
-            use super::*;
+        /// The declaration the host reads out of the file. `#[used]` because
+        /// nothing references it: `--gc-sections` would otherwise drop the one
+        /// thing that says this stage exists.
+        #[used]
+        #[link_section = #section]
+        static #decl: [u8; #n_bytes] = [#(#bytes),*];
 
-            const PARAMS: [::se::Param; #n] = [#(#param_consts),*];
-            static PARAM_TABLE: [::se::Param; #n] = PARAMS;
-            #(#slot_consts)*
-
-            /// # Safety
-            /// Called by the host with a call frame matching `PARAM_TABLE`.
-            pub unsafe extern "C" fn run(call: *const ::se::StageCall) {
-                let n_rows = (*call).n_rows;
-                for row in 0..n_rows {
-                    super::#name(#(#args),*);
+        /// The batched loop. One crossing per stage; the rows are the host's
+        /// own bytes, read and written in place.
+        #[no_mangle]
+        pub extern "C" fn #run() -> u32 {
+            unsafe {
+                #(#lets)*
+                let se_n = crate::se_pool(#first.pool).len;
+                let mut se_i = 0u32;
+                while se_i < se_n {
+                    #name(#(#args),*);
+                    se_i += 1;
                 }
+                se_n
             }
-
-            pub static SPEC: ::se::StageSpec = ::se::StageSpec {
-                name: ::se::Str::new(#name_str),
-                params: ::se::Slice::new(&PARAM_TABLE),
-                run,
-            };
         }
     })
 }

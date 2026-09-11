@@ -100,20 +100,6 @@ pub const fn hash_field(h: u64, fname: &str, ty: ScalarTy, offset: u32, count: u
     mix(h, count as u64)
 }
 
-/// Where a module pushes its layouts. The host owns the storage behind `ctx`.
-#[repr(C)]
-pub struct LayoutSink {
-    pub ctx: *mut core::ffi::c_void,
-    pub push: unsafe extern "C" fn(*mut core::ffi::c_void, *const Layout),
-}
-
-impl LayoutSink {
-    /// # Safety
-    /// `self` must be the sink the host just handed to `se_register_layouts`.
-    pub unsafe fn push(&mut self, l: &Layout) {
-        (self.push)(self.ctx, l as *const Layout)
-    }
-}
 
 /// Implemented by `#[derive(se::Schema)]`. The only way a `#[repr(C)]` struct
 /// becomes a component the host can store.

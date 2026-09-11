@@ -5,6 +5,7 @@
 //! recompiled underneath a running world.
 
 use crate::registry::LayoutDef;
+use crate::space::{Records, Space};
 use se_abi::Entity;
 use std::collections::HashMap;
 
@@ -99,7 +100,7 @@ impl Column {
         }
     }
 
-    fn slot_mut(&mut self, row: u32) -> &mut [u8] {
+    pub(crate) fn slot_mut(&mut self, row: u32) -> &mut [u8] {
         let off = row as usize * self.stride as usize;
         let n = self.layout.size as usize;
         let base = self.data.as_mut_ptr() as *mut u8;
@@ -272,7 +273,38 @@ impl World {
         c.row_of(e).map(|r| c.slot(r))
     }
 
+    /// A component borrowed in place, for a caller that will write to it.
+    ///
+    /// The pointer is only good until the next structural change: an insert
+    /// can grow the column and move it. Callers above hold `&mut Ctl` for the
+    /// life of the borrow, which is what makes that impossible rather than
+    /// merely discouraged.
+    pub fn get_mut(&mut self, e: Entity, name: &str) -> Option<&mut [u8]> {
+        if !self.alive(e) {
+            return None;
+        }
+        let c = self.cols.get_mut(name)?;
+        let row = c.row_of(e)?;
+        Some(c.slot_mut(row))
+    }
+
     pub fn remove(&mut self, e: Entity, name: &str) -> bool {
         self.cols.get_mut(name).is_some_and(|c| c.remove(e))
+    }
+}
+
+/// The sparse-set world, seen as plain space.
+///
+/// Nothing here mentions an entity: that is the point. When this storage moves
+/// out of the host and into a pipeline module, this is the interface the
+/// render side keeps talking to, unchanged.
+impl Space for World {
+    fn layout(&self, name: &str) -> Option<&LayoutDef> {
+        World::layout(self, name)
+    }
+
+    fn records(&self, name: &str) -> Option<Records<'_>> {
+        let c = self.column(name)?;
+        Some(Records { bytes: c.bytes(), stride: c.stride, len: c.len() })
     }
 }

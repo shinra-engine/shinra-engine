@@ -51,6 +51,10 @@ pub struct Pass {
     /// Sampled buffer names read as textures — always previous-frame content,
     /// which is why reading a buffer you also write is legal.
     pub reads: Slice<Str>,
+    /// Asset names to bind as textures — an image an `asset/*.so` published,
+    /// as opposed to `reads`, which names buffers this engine rendered. Unlike
+    /// a buffer read, this is current: an asset does not change mid-frame.
+    pub textures: Slice<Str>,
     /// A component whose first entity is uploaded as a uniform for this pass.
     /// Empty for none. This is how a camera reaches a shader without the
     /// render side being handed the world: it names one component, and the
@@ -86,16 +90,3 @@ pub struct GraphDesc {
     pub present: Str,
 }
 
-#[repr(C)]
-pub struct GraphSink {
-    pub ctx: *mut core::ffi::c_void,
-    pub push: unsafe extern "C" fn(*mut core::ffi::c_void, *const GraphDesc),
-}
-
-impl GraphSink {
-    /// # Safety
-    /// `self` must be the sink the host just handed to `se_register_graph`.
-    pub unsafe fn push(&mut self, g: &GraphDesc) {
-        (self.push)(self.ctx, g as *const GraphDesc)
-    }
-}

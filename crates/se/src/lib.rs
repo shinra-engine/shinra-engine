@@ -1,46 +1,43 @@
-//! What a Shinra module is written against.
+//! What a game module compiles against.
 //!
-//! A module is a single `.rs` file at depth 1 of a bundle. It depends on this
-//! crate, declares itself with one of the entry macros, and exports nothing
-//! else. It never links the host, never sees the world, and can be rebuilt and
-//! swapped underneath a running game.
+//! Almost nothing, now. The types a module needs — every component, every
+//! control var, the arena map, the column and pool descriptors — are generated
+//! from `contract.wit` and included into the module's own crate root, so they
+//! are not imported from anywhere. What is left here is the one thing a
+//! generator cannot supply: the attribute that turns a function into a stage.
 //!
-//! ```ignore
-//! // bundle/data.rs
-//! #[repr(C)]
-//! #[derive(Clone, Copy, se::Schema)]
-//! pub struct Transform { pub pos: [f32; 3], pub rot: [f32; 4], pub scale: [f32; 3] }
+//! This crate used to carry the whole ABI: `Str`, `Slice`, `Layout`, `Ctl`,
+//! `StageCall`, six registration entry points and an allocator. All of it is
+//! gone rather than ported —
 //!
-//! se::layouts!(Transform);
-//! ```
+//!   * layouts and buffers are `contract.wit`, and generated;
+//!   * `Ctl` is gone because a game's whole write surface is the control var
+//!     set the contract declares;
+//!   * `StageCall` is gone because there is no query left to resolve: a column
+//!     is dense and row `i` is row `i` within its pool;
+//!   * the allocator is gone because a module allocates nothing — the world is
+//!     in memory the host owns and every module imports.
 //!
-//! ```ignore
-//! // process/motion.rs
-//! #[se::stage]
-//! fn motion(t: &mut Transform, b: &Body, dt: f32) { /* ... */ }
-//!
-//! se::stages!(motion);
-//! ```
+//! A module that needs none of those needs no ABI crate either, which is why
+//! this one is four lines of code and a page of explanation.
 
-mod build_graph;
-mod entry;
-mod param;
+#![no_std]
 
-pub use build_graph::{GraphBuilder, PassBuild};
-pub use param::{fetch_component, fetch_dt, fetch_resource, StageParam};
-pub use se_abi::*;
-
-/// `#[derive(se::Schema)]`
-pub use se_macro::Schema;
-/// `#[se::stage]`
+/// `#[se::stage]` — a function whose parameter list is its query.
+///
+/// ```ignore
+/// #[se::stage]
+/// fn orbit(o: &mut Orbit, t: &mut Transform) { ... }
+/// ```
+///
+/// It emits the declaration the host reads out of the file, and the batched
+/// loop that runs the body over every row of the pool.
 pub use se_macro::stage;
-/// `se::stages!(a, b);`
-pub use se_macro::stages;
 
-/// Everything a module file normally wants in scope.
-pub mod prelude {
-    pub use crate::{
-        key, Access, AssetDesc, BufferDesc, Ctl, Draw, Edge, Entity, Extent, Field, Format, Frame,
-        GraphDesc, Input, Layout, Pass, ScalarTy, Schema, Slot, SlotBind, Str,
-    };
-}
+/// `#[derive(se::Schema)]` — deprecated on this route.
+///
+/// A component is declared in `contract.wit` and generated, so deriving one
+/// from a Rust struct would be the second place its shape is written down.
+/// Kept only so an old module fails with this message rather than an unknown
+/// attribute.
+pub use se_macro::Schema;

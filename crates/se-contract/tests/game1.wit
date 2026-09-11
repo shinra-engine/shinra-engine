@@ -1,0 +1,75 @@
+// game1's contract, as `contract.wit`. Derived from the shape
+// `shinra-examples/game1/bundle/{data,buffer}.rs` declares, with one change
+// that is the point of the exercise: `Camera` and `Look` were singleton
+// components and are now control vars, because a singleton written only by the
+// control layer is exactly what a control var is.
+package shinra:game1@0.1.0;
+
+/// The vector types WGSL has. Named rather than spelled as tuples so each can
+/// be given the alignment WGSL demands.
+interface types {
+  record vec2 { x: f32, y: f32 }
+  record vec3 { x: f32, y: f32, z: f32 }
+  record vec4 { x: f32, y: f32, z: f32, w: f32 }
+}
+
+/// Fixed-size references to things that are not fixed size. Nothing
+/// variable-length ever enters a record: a 12-byte bunny and an 804-byte
+/// teapot are the same 8 bytes here.
+interface handles {
+  /// A run of host-owned bytes.
+  record span { off: u32, len: u32 }
+
+  /// Where the host currently has a column. Read every frame rather than
+  /// baked, so a column can be grown or moved with no module rebuilt.
+  record column { base: u32, cap: u32, stride: u32, pool: u32 }
+
+  /// The length the columns of one pool share.
+  record pool { len: u32, cap: u32 }
+}
+
+/// Per-row data. A `process` stage may write one only by naming it `&mut`.
+interface components {
+  use types.{vec3, vec4};
+
+  record transform { pos: vec3, rot: vec4, scale: vec3 }
+  record orbit     { center: vec3, radius: f32, speed: f32, phase: f32, tilt: f32 }
+  record spin      { axis: vec3, rate: f32, angle: f32 }
+  record breathe   { base: f32, amount: f32, rate: f32, phase: f32 }
+}
+
+/// Columns that share one length and are row-aligned. Row `i` means the same
+/// body in all four, and the pool is what one `draw-instanced` uploads.
+interface pools {
+  use components.{transform, orbit, spin, breathe};
+
+  record bodies { t: transform, o: orbit, s: spin, b: breathe }
+}
+
+/// The control var set: the whole write surface of game.wasm. `bodies` is how
+/// a roster is asked for — there is no spawn and no despawn.
+interface control {
+  use types.{vec3};
+
+  record look   { asset: u32, graph: u32, bodies: u32 }
+  record camera { eye: vec3, focus: vec3, fov: f32, dist: f32, yaw: f32, pitch: f32 }
+  record intent { swipe: s32, quit: u32 }
+}
+
+/// render.wasm records; the host replays on WebGPU. Fixed-size commands, so
+/// the host walks the list with a stride and needs no decoder.
+interface render {
+  record command {
+    kind: u32,
+    colour: u32,
+    shader: u32,
+    column: u32,
+    count: u32,
+    uniform-off: u32,
+    uniform-len: u32,
+    pad: u32,
+    clear-r: f32, clear-g: f32, clear-b: f32, clear-a: f32,
+  }
+
+  record frame { commands: u32, count: u32, present: u32, epoch: u32 }
+}

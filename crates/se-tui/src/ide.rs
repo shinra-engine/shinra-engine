@@ -136,25 +136,38 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
     .split(root[1]);
 
     // --- Hierarchy: what exists -------------------------------------------
-    let nodes: Vec<ListItem> = ide
-        .hierarchy
-        .iter()
-        .enumerate()
-        .map(|(i, n)| {
-            let sel = i == ide.selected;
-            ListItem::new(Line::from(vec![
-                Span::styled(if sel { "› " } else { "  " }, Style::default().fg(ACCENT)),
-                Span::styled(
-                    n.label.clone(),
-                    if sel {
-                        Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::default().fg(OK)
-                    },
-                ),
-            ]))
-        })
-        .collect();
+    let mut nodes: Vec<ListItem> = Vec::new();
+    for (i, n) in ide.hierarchy.iter().enumerate() {
+        let sel = i == ide.selected;
+        let open = ide.is_expanded(n);
+        // A leaf gets a space where the twisty would be, so labels stay in one
+        // column whether or not anything can be unfolded.
+        let twisty = match (n.components.is_empty(), open) {
+            (true, _) => " ",
+            (false, true) => "▾",
+            (false, false) => "▸",
+        };
+        nodes.push(ListItem::new(Line::from(vec![
+            Span::styled(if sel { "› " } else { "  " }, Style::default().fg(ACCENT)),
+            Span::styled(format!("{twisty} "), Style::default().fg(DIM)),
+            Span::styled(
+                n.label.clone(),
+                if sel {
+                    Style::default().fg(ACCENT).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(OK)
+                },
+            ),
+        ])));
+        if open {
+            for c in &n.components {
+                nodes.push(ListItem::new(Line::from(vec![
+                    Span::raw("      "),
+                    Span::styled(c.clone(), Style::default().fg(DIM)),
+                ])));
+            }
+        }
+    }
     f.render_widget(
         list(nodes, panel("Hierarchy", ide.focused == Panel::Hierarchy)),
         mid[0],
@@ -167,13 +180,30 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
     viewport(f, inner, px, ide);
 
     // --- Inspector: the selected entity's components -----------------------
+    let on_inspector = ide.focused == Panel::Inspector;
     let rows: Vec<ListItem> = ide
         .inspector
         .iter()
-        .map(|(k, v)| {
+        .enumerate()
+        .map(|(i, (k, v))| {
+            let here = on_inspector && i == ide.inspector_sel;
+            // While a row is being typed into it shows the buffer and a caret,
+            // not the value underneath — the two disagree until Enter, and
+            // showing the old one would make the edit look like it was lost.
+            let (text, style) = match (&ide.editing, here) {
+                (Some(buf), true) => {
+                    (format!("{buf}▏"), Style::default().fg(ACCENT).add_modifier(Modifier::BOLD))
+                }
+                (_, true) => (v.clone(), Style::default().fg(ACCENT)),
+                _ => (v.clone(), Style::default().fg(OK)),
+            };
             ListItem::new(Line::from(vec![
+                Span::styled(
+                    if here { "›" } else { " " }.to_string(),
+                    Style::default().fg(ACCENT),
+                ),
                 Span::styled(k.clone(), Style::default().fg(DIM)),
-                Span::styled(v.clone(), Style::default().fg(OK)),
+                Span::styled(text, style),
             ]))
         })
         .collect();

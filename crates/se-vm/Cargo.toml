@@ -1,0 +1,14 @@
+[package]
+name = "se-vm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+se-contract.workspace = true
+anyhow.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wasmtime.workspace = true
+
+[dev-dependencies]
+se-contract.workspace = true

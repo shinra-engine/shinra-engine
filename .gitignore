@@ -1,9 +1,11 @@
-Cargo.lock
 .env
 *.vsix
 *.patch
+*.patch.log
 
 target/
+# `shinra build` writes the contract and every module here.
+target/shinra/
 tests/snapshots/
 *.png
 .tmp/
@@ -16,3 +18,5 @@ vscode-ext/out/
 node_modules/
 vscode-ext/node_modules/
 dist/
+web/games/
+web/pkg/

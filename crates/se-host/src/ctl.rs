@@ -6,7 +6,7 @@
 //! single-writer reasoning dies.
 
 use crate::registry::AssetDef;
-use crate::world::World;
+use crate::space::Store;
 use core::ffi::c_void;
 use se_abi::{Ctl, Entity, Slice, Slot, Str};
 
@@ -22,13 +22,13 @@ pub struct Requests {
 }
 
 pub struct HostCtx<'a> {
-    pub world: &'a mut World,
+    pub world: &'a mut dyn Store,
     pub assets: &'a [&'a AssetDef],
     pub req: Requests,
 }
 
 impl<'a> HostCtx<'a> {
-    pub fn new(world: &'a mut World, assets: &'a [&'a AssetDef]) -> HostCtx<'a> {
+    pub fn new(world: &'a mut dyn Store, assets: &'a [&'a AssetDef]) -> HostCtx<'a> {
         HostCtx { world, assets, req: Requests::default() }
     }
 
@@ -41,6 +41,7 @@ impl<'a> HostCtx<'a> {
             alive,
             set,
             get,
+            ptr,
             remove,
             query,
             asset,
@@ -93,6 +94,17 @@ unsafe extern "C" fn get(ctx: *mut c_void, e: Entity, name: Str, out: *mut u8, c
     }
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
     true
+}
+
+/// A pointer straight into the column, or null. Size is checked here rather
+/// than trusted: a module built against a different layout must fail to find
+/// the component, not reinterpret somebody else's bytes.
+unsafe extern "C" fn ptr(ctx: *mut c_void, e: Entity, name: Str, len: u32) -> *mut u8 {
+    let c = cx(ctx);
+    match c.world.get_mut(e, name.as_str()) {
+        Some(bytes) if bytes.len() == len as usize => bytes.as_mut_ptr(),
+        _ => core::ptr::null_mut(),
+    }
 }
 
 unsafe extern "C" fn remove(ctx: *mut c_void, e: Entity, name: Str) -> bool {

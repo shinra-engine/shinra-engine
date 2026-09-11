@@ -67,7 +67,7 @@ impl Panel {
 /// One entity, as the Hierarchy lists it.
 pub struct Node {
     pub label: String,
-    /// Component names it carries — what the Inspector expands.
+    /// Component names it carries — what expanding the node reveals.
     pub components: Vec<String>,
 }
 
@@ -82,8 +82,20 @@ pub struct Ide {
 
     pub hierarchy: Vec<Node>,
     pub selected: usize,
+    /// Which entities are showing their components. Keyed by label rather
+    /// than by row, because the roster is rebuilt from the world every frame
+    /// and a row index means a different entity the moment one despawns.
+    pub expanded: std::collections::HashSet<String>,
     /// `(field, value)` rows for the selected entity.
     pub inspector: Vec<(String, String)>,
+    /// Which of those rows hold a value that can be typed into. Component
+    /// headers are false, and so is anything the value column truncates.
+    /// Filled by the host: the IDE draws rows, the host knows what one means.
+    pub inspector_editable: Vec<bool>,
+    pub inspector_sel: usize,
+    /// The keystrokes so far, while a field is being edited. The IDE holds the
+    /// text; the host holds the meaning and does the writing.
+    pub editing: Option<String>,
     /// The bundle's module tree, as the layout rule lays it out.
     pub project: Vec<String>,
     pub log: Vec<String>,
@@ -106,7 +118,11 @@ impl Default for Ide {
             frame: 0,
             hierarchy: Vec::new(),
             selected: 0,
+            expanded: std::collections::HashSet::new(),
             inspector: Vec::new(),
+            inspector_editable: Vec::new(),
+            inspector_sel: 0,
+            editing: None,
             project: Vec::new(),
             log: Vec::new(),
             focused: Panel::default(),
@@ -144,6 +160,88 @@ impl Ide {
             self.games.len().max(1),
             self.game()
         )
+    }
+
+    /// Show or hide the selected entity's components.
+    ///
+    /// Selection stays on entities — the component rows are a disclosure, not
+    /// somewhere to navigate to — so `selected` keeps meaning what the rest of
+    /// the host already assumes it means.
+    pub fn set_expanded(&mut self, open: bool) -> bool {
+        let Some(n) = self.hierarchy.get(self.selected) else { return false };
+        if n.components.is_empty() {
+            return false;
+        }
+        let label = n.label.clone();
+        if open {
+            self.expanded.insert(label)
+        } else {
+            self.expanded.remove(&label)
+        }
+    }
+
+    pub fn is_expanded(&self, n: &Node) -> bool {
+        self.expanded.contains(&n.label)
+    }
+
+    /// Step to the next inspector row that can actually be edited, skipping
+    /// component headers on the way.
+    pub fn move_inspector(&mut self, delta: i32) {
+        let n = self.inspector_editable.len();
+        if n == 0 {
+            return;
+        }
+        let mut i = self.inspector_sel.min(n - 1);
+        for _ in 0..n {
+            i = ((i as i32 + delta).rem_euclid(n as i32)) as usize;
+            if self.inspector_editable[i] {
+                self.inspector_sel = i;
+                return;
+            }
+        }
+    }
+
+    /// Start typing into the selected row, seeded with what it already says.
+    pub fn begin_edit(&mut self) -> bool {
+        if !self.inspector_editable.get(self.inspector_sel).copied().unwrap_or(false) {
+            return false;
+        }
+        let cur = self.inspector.get(self.inspector_sel).map(|(_, v)| v.clone());
+        self.editing = Some(cur.unwrap_or_default());
+        true
+    }
+
+    pub fn edit_push(&mut self, c: char) {
+        if let Some(b) = self.editing.as_mut() {
+            if b.len() < 64 {
+                b.push(c);
+            }
+        }
+    }
+
+    pub fn edit_backspace(&mut self) {
+        if let Some(b) = self.editing.as_mut() {
+            b.pop();
+        }
+    }
+
+    /// Hand the typed text to the host and leave edit mode.
+    pub fn take_edit(&mut self) -> Option<(usize, String)> {
+        self.editing.take().map(|t| (self.inspector_sel, t))
+    }
+
+    /// Keep the selection valid across a frame that changed the roster.
+    pub fn clamp_inspector(&mut self) {
+        let n = self.inspector_editable.len();
+        if n == 0 {
+            self.inspector_sel = 0;
+        } else if self.inspector_sel >= n || !self.inspector_editable[self.inspector_sel] {
+            self.inspector_sel = self
+                .inspector_editable
+                .iter()
+                .position(|&e| e)
+                .unwrap_or(0);
+        }
     }
 
     pub fn move_selection(&mut self, delta: i32) {

@@ -185,3 +185,6 @@ impl Uniform {
         out
     }
 }
+
+#[cfg(test)]
+mod tests;

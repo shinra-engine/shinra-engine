@@ -1,0 +1,12 @@
+[package]
+name = "se-contract"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+wit-parser.workspace = true
+anyhow.workspace = true
+
+[[bin]]
+name = "se-contract"
+path = "src/main.rs"

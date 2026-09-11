@@ -15,4 +15,4 @@ pub use ide::{draw, Areas, HELP};
 pub use present::{pixel_size, Pixels};
 pub use state::{Ide, Mode, Node, Panel, PANEL_ORDER};
 pub use textart::{TextArtMode, TextCell};
-pub use term::{Intent, Terminal};
+pub use term::{Edit, Intent, Terminal};

@@ -5,7 +5,7 @@
 //! inside `push`: a shader can therefore be assembled at registration time —
 //! `format!` over shared WGSL fragments — instead of having to be one literal.
 
-use se_abi::{Draw, DrawKind, Edge, GraphDesc, GraphSink, Pass, Slice, Str};
+use se_abi::{Draw, DrawKind, Edge, GraphDesc, Pass, Slice, Str};
 
 fn s(x: &str) -> Str {
     Str { ptr: x.as_ptr(), len: x.len() }
@@ -18,6 +18,7 @@ pub struct PassBuild {
     color: Vec<String>,
     depth: Option<String>,
     reads: Vec<String>,
+    textures: Vec<String>,
     uniform_of: Option<String>,
     clear: [f32; 4],
     load: bool,
@@ -43,6 +44,13 @@ impl PassBuild {
     /// Sampled buffers read as textures — always the previous frame.
     pub fn reads(mut self, names: &[&str]) -> Self {
         self.reads = names.iter().map(|s| s.to_string()).collect();
+        self
+    }
+    /// Images published by an `asset/*.so`, bound as textures. The shader
+    /// name is the asset name without its extension, so `"sprites.png"` is
+    /// `sprites`.
+    pub fn textures(mut self, names: &[&str]) -> Self {
+        self.textures = names.iter().map(|s| s.to_string()).collect();
         self
     }
     /// A component whose first entity becomes this pass's uniform.
@@ -105,30 +113,54 @@ impl GraphBuilder {
 
     /// # Safety
     /// `sink` must be the one the host passed to `se_register_graph`.
-    pub unsafe fn finish(&self, sink: &mut GraphSink) {
-        // Every borrowed pointer below points into `self` or into these
-        // locals, all of which outlive the `push` that copies them.
-        let colors: Vec<Vec<Str>> = self
+    /// Freeze the built graph into something the host can read after this
+    /// returns.
+    ///
+    /// The old `finish` handed a `GraphDesc` to a sink while its parts were
+    /// still locals, and that was sound only because `push` deep-copied before
+    /// the frame went away. The host now reads afterwards, so every part has
+    /// to outlive the call — each of these vectors is leaked, once, into the
+    /// module's own memory.
+    pub fn into_held(self) -> se_abi::Held {
+        // The descriptor is full of `Str`s pointing into this builder's own
+        // `String`s. The old `finish` borrowed the builder and handed the
+        // descriptor to a sink that deep-copied during the call, so the
+        // strings only had to outlive that call. The host reads afterwards
+        // now, so they have to outlive the module — leak the builder and every
+        // string in it stays put.
+        let this: &'static GraphBuilder = ::std::boxed::Box::leak(::std::boxed::Box::new(self));
+        let colors: Vec<Vec<Str>> = this
             .passes
             .iter()
             .map(|p| p.color.iter().map(|c| s(c)).collect())
             .collect();
-        let reads: Vec<Vec<Str>> = self
+        let reads: Vec<Vec<Str>> = this
             .passes
             .iter()
             .map(|p| p.reads.iter().map(|r| s(r)).collect())
             .collect();
+        let textures: Vec<Vec<Str>> = this
+            .passes
+            .iter()
+            .map(|p| p.textures.iter().map(|t| s(t)).collect())
+            .collect();
 
-        let passes: Vec<Pass> = self
+        let passes: Vec<Pass> = this
             .passes
             .iter()
             .enumerate()
             .map(|(i, p)| Pass {
                 name: s(&p.name),
                 shader: s(&p.shader),
-                color: Slice::from_raw(colors[i].as_ptr(), colors[i].len()),
+                // SAFETY: each of these vectors is leaked below, before this
+                // function returns, so every pointer taken here is valid for
+                // as long as the module is loaded. `Vec::leak` keeps the heap
+                // buffer exactly where it is, so taking the pointer first and
+                // leaking after is sound.
+                color: unsafe { Slice::from_raw(colors[i].as_ptr(), colors[i].len()) },
                 depth: p.depth.as_deref().map(s).unwrap_or(Str::EMPTY),
-                reads: Slice::from_raw(reads[i].as_ptr(), reads[i].len()),
+                reads: unsafe { Slice::from_raw(reads[i].as_ptr(), reads[i].len()) },
+                textures: unsafe { Slice::from_raw(textures[i].as_ptr(), textures[i].len()) },
                 uniform_of: p.uniform_of.as_deref().map(s).unwrap_or(Str::EMPTY),
                 clear: p.clear,
                 load: p.load,
@@ -143,18 +175,27 @@ impl GraphBuilder {
             })
             .collect();
 
-        let edges: Vec<Edge> = self
+        let edges: Vec<Edge> = this
             .edges
             .iter()
             .map(|(a, b)| Edge { from: s(a), to: s(b) })
             .collect();
 
+        // Leak the two levels of indirection the descriptor points through,
+        // innermost first, so nothing below outlives what points at it.
+        for v in colors.into_iter().chain(reads).chain(textures) {
+            let _ = Vec::leak(v);
+        }
+        let passes = Vec::leak(passes);
+        let edges = Vec::leak(edges);
+
         let g = GraphDesc {
-            name: s(&self.name),
-            passes: Slice::from_raw(passes.as_ptr(), passes.len()),
-            edges: Slice::from_raw(edges.as_ptr(), edges.len()),
-            present: s(&self.present),
+            name: s(&this.name),
+            // SAFETY: both were just leaked.
+            passes: unsafe { Slice::from_raw(passes.as_ptr(), passes.len()) },
+            edges: unsafe { Slice::from_raw(edges.as_ptr(), edges.len()) },
+            present: s(&this.present),
         };
-        sink.push(&g);
+        crate::hold(std::vec![g])
     }
 }

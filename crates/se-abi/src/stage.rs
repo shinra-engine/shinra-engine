@@ -102,19 +102,6 @@ pub struct StageSpec {
     pub run: unsafe extern "C" fn(*const StageCall),
 }
 
-#[repr(C)]
-pub struct StageSink {
-    pub ctx: *mut core::ffi::c_void,
-    pub push: unsafe extern "C" fn(*mut core::ffi::c_void, *const StageSpec),
-}
-
-impl StageSink {
-    /// # Safety
-    /// `self` must be the sink the host just handed to `se_register_stages`.
-    pub unsafe fn push(&mut self, s: &StageSpec) {
-        (self.push)(self.ctx, s as *const StageSpec)
-    }
-}
 
 /// Index of parameter `i` *within its own kind* — its column index if it is a
 /// component, its resource index if it is a resource. `#[se::stage]` folds

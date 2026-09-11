@@ -8,9 +8,7 @@ name = "shinra"
 path = "src/main.rs"
 
 [dependencies]
-se-abi.workspace = true
-se-host.workspace = true
-se-render.workspace = true
-se-tui.workspace = true
-ratatui.workspace = true
+se-contract.workspace = true
+se-gpu.workspace = true
+se-vm.workspace = true
 anyhow.workspace = true

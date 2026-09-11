@@ -80,19 +80,6 @@ impl BufferDesc {
     }
 }
 
-#[repr(C)]
-pub struct BufferSink {
-    pub ctx: *mut core::ffi::c_void,
-    pub push: unsafe extern "C" fn(*mut core::ffi::c_void, *const BufferDesc),
-}
-
-impl BufferSink {
-    /// # Safety
-    /// `self` must be the sink the host just handed to `se_register_buffers`.
-    pub unsafe fn push(&mut self, b: &BufferDesc) {
-        (self.push)(self.ctx, b as *const BufferDesc)
-    }
-}
 
 /// `asset/*.so`: name → bytes. Content, never data.
 #[repr(C)]
@@ -108,16 +95,3 @@ impl AssetDesc {
     }
 }
 
-#[repr(C)]
-pub struct AssetSink {
-    pub ctx: *mut core::ffi::c_void,
-    pub push: unsafe extern "C" fn(*mut core::ffi::c_void, *const AssetDesc),
-}
-
-impl AssetSink {
-    /// # Safety
-    /// `self` must be the sink the host just handed to `se_register_assets`.
-    pub unsafe fn push(&mut self, a: &AssetDesc) {
-        (self.push)(self.ctx, a as *const AssetDesc)
-    }
-}

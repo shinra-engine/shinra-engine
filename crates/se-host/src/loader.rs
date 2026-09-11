@@ -1,5 +1,24 @@
 //! Opening a module, and letting go of one.
 //!
+//! # Two backends, one source
+//!
+//! A bundle is built either native or wasm, and never mixed — a game repo
+//! chooses at build time and the same module source serves both. That choice
+//! is what makes the hard part tractable: within one bundle every module
+//! shares an address space, so the host can hand out pointers into component
+//! columns and the per-entity loop stays inside the module.
+//!
+//! Native gets that from `dlopen`. Wasm gets it from every module in the
+//! bundle importing one linear memory the host owns, which makes a pointer an
+//! offset every module agrees on. Neither can reach into the other, and
+//! nothing needs them to.
+//!
+//! What differs is only *how an entry point is reached*: native looks a symbol
+//! up and calls it with a sink; a wasm guest cannot call a host function
+//! pointer handed to it as data, so it calls an import by name instead. That
+//! difference lives behind `register` below and inside `se`'s entry macros —
+//! never in a module's source.
+//!
 //! Two things make hot swap work here. The host copies every string and byte
 //! out of the image at registration time, so nothing it keeps points into a
 //! library it might drop. And each load goes through a fresh file on disk,
@@ -8,7 +27,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use libloading::{Library, Symbol};
-use se_abi::AbiVersion;
+use se_abi::{AbiVersion, Registered};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
@@ -83,12 +102,33 @@ impl Module {
         Ok(())
     }
 
+    /// Run one registration entry point and read back what it registered.
+    ///
+    /// Every `se_register_*` has the same shape — nothing in, one pointer out
+    /// — which is what lets a wasm backend implement the same call. There the
+    /// returned integer is an offset into the module's exported linear memory
+    /// rather than an address, and only this function has to know the
+    /// difference.
+    ///
     /// # Safety
-    /// `T` must be the signature the module actually exports under `sym`.
-    pub unsafe fn sym<T>(&self, sym: &[u8]) -> Result<Symbol<'_, T>> {
-        self.lib.get(sym).with_context(|| {
-            format!("`{}` exports no {}", self.name, String::from_utf8_lossy(sym))
-        })
+    /// The module must stay loaded for as long as the result is read; the
+    /// caller must cast to the element type `sym` registers, and `stride` is
+    /// checked against it in [`Module::items`].
+    pub unsafe fn registered_ptr(&self, sym: &[u8]) -> Result<*const Registered> {
+        let f: Symbol<unsafe extern "C" fn() -> *const Registered> =
+            self.lib.get(sym).with_context(|| {
+                format!("`{}` exports no {}", self.name, String::from_utf8_lossy(sym))
+            })?;
+        Ok(f())
+    }
+
+    /// The registered items, as a slice.
+    ///
+    /// # Safety
+    /// `T` must be the type `sym` registers, and `self` must stay loaded.
+    pub unsafe fn items<T>(&self, sym: &[u8]) -> Result<&[T]> {
+        let r = self.registered_ptr(sym)?;
+        crate::read::items(r, &String::from_utf8_lossy(sym), &self.name)
     }
 
     /// Whether `sym` is present at all — some entry points are optional.

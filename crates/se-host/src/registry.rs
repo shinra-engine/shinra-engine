@@ -6,8 +6,8 @@
 //! why a `Module` and the specs taken from it are always dropped together.
 
 use se_abi::{
-    AssetDesc, BufferDesc, ControlSpec, Ctl, DrawKind, Extent, Format, Frame, GraphDesc, Layout,
-    Pass, ScalarTy, Slot, StageCall, StageSpec,
+    AssetDesc, BufferDesc, DrawKind, Extent, Format, GraphDesc, Layout,
+    Pass, ScalarTy, StageCall, StageSpec,
 };
 
 #[derive(Clone, Debug)]
@@ -164,6 +164,7 @@ pub struct PassDef {
     pub color: Vec<String>,
     pub depth: Option<String>,
     pub reads: Vec<String>,
+    pub textures: Vec<String>,
     pub uniform_of: Option<String>,
     pub clear: [f32; 4],
     pub load: bool,
@@ -223,6 +224,12 @@ unsafe fn pass_of(p: &Pass) -> PassDef {
             .iter()
             .map(|s| s.as_str().to_string())
             .collect(),
+        textures: p
+            .textures
+            .as_slice()
+            .iter()
+            .map(|s| s.as_str().to_string())
+            .collect(),
         uniform_of: opt(p.uniform_of),
         clear: p.clear,
         load: p.load,
@@ -234,29 +241,4 @@ unsafe fn pass_of(p: &Pass) -> PassDef {
     }
 }
 
-pub struct ControlDef {
-    pub name: String,
-    pub slots: Vec<(Slot, String)>,
-    pub start: Option<unsafe extern "C" fn(*mut Ctl)>,
-    pub tick: unsafe extern "C" fn(*mut Ctl, *const Frame),
-    pub stop: Option<unsafe extern "C" fn(*mut Ctl)>,
-}
 
-impl ControlDef {
-    /// # Safety
-    /// `c` must come from a library that is still loaded.
-    pub unsafe fn from_abi(c: &ControlSpec) -> ControlDef {
-        ControlDef {
-            name: c.name.as_str().to_string(),
-            slots: c
-                .slots
-                .as_slice()
-                .iter()
-                .map(|s| (s.slot, s.module.as_str().to_string()))
-                .collect(),
-            start: c.start,
-            tick: c.tick,
-            stop: c.stop,
-        }
-    }
-}

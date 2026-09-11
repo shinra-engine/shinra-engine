@@ -1,0 +1,13 @@
+[package]
+name = "se-gpu"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+se-contract.workspace = true
+se-vm.workspace = true
+anyhow.workspace = true
+wgpu.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+pollster.workspace = true

@@ -237,45 +237,64 @@ pub fn image_to_cells(img: &Frame, mode: TextArtMode, threshold: u8) -> Vec<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use image::Rgba;
 
-    fn solid(w: u32, h: u32, c: [u8; 4]) -> RgbaImage {
-        RgbaImage::from_pixel(w, h, Rgba(c))
+    /// A framebuffer, not an `image::RgbaImage`. The port took `Frame` — a
+    /// width, a height and borrowed RGBA bytes — precisely so the TUI need not
+    /// depend on an image library, and these tests had been left behind
+    /// speaking the old dialect against a dependency the crate does not have.
+    struct Buf {
+        w: u32,
+        h: u32,
+        px: Vec<u8>,
+    }
+
+    impl Buf {
+        fn frame(&self) -> Frame<'_> {
+            Frame { width: self.w, height: self.h, rgba: &self.px }
+        }
+        fn put(&mut self, x: u32, y: u32, c: [u8; 4]) {
+            let i = ((y * self.w + x) * 4) as usize;
+            self.px[i..i + 4].copy_from_slice(&c);
+        }
+    }
+
+    fn solid(w: u32, h: u32, c: [u8; 4]) -> Buf {
+        Buf { w, h, px: c.repeat((w * h) as usize) }
     }
 
     #[test]
     fn cell_grid_dimensions() {
         let img = solid(8, 8, [0, 0, 0, 255]);
-        let q = image_to_cells(&img, TextArtMode::Quadrant, DEFAULT_THRESHOLD);
+        let q = image_to_cells(&img.frame(), TextArtMode::Quadrant, DEFAULT_THRESHOLD);
         assert_eq!((q.len(), q[0].len()), (4, 4));
-        let b = image_to_cells(&img, TextArtMode::Braille, DEFAULT_THRESHOLD);
+        let b = image_to_cells(&img.frame(), TextArtMode::Braille, DEFAULT_THRESHOLD);
         assert_eq!((b.len(), b[0].len()), (2, 4));
     }
 
     #[test]
     fn black_image_is_blank() {
         let img = solid(4, 8, [0, 0, 0, 255]);
-        let q = image_to_cells(&img, TextArtMode::Quadrant, DEFAULT_THRESHOLD);
+        let q = image_to_cells(&img.frame(), TextArtMode::Quadrant, DEFAULT_THRESHOLD);
         assert!(q.iter().flatten().all(|c| c.ch == ' '));
-        let b = image_to_cells(&img, TextArtMode::Braille, DEFAULT_THRESHOLD);
+        let b = image_to_cells(&img.frame(), TextArtMode::Braille, DEFAULT_THRESHOLD);
         assert!(b.iter().flatten().all(|c| c.ch == '\u{2800}'));
     }
 
     #[test]
     fn white_image_is_full() {
         let img = solid(4, 8, [255, 255, 255, 255]);
-        let q = image_to_cells(&img, TextArtMode::Quadrant, DEFAULT_THRESHOLD);
+        let q = image_to_cells(&img.frame(), TextArtMode::Quadrant, DEFAULT_THRESHOLD);
         assert!(q.iter().flatten().all(|c| c.ch == '█' && c.rgb == [255, 255, 255]));
-        let b = image_to_cells(&img, TextArtMode::Braille, DEFAULT_THRESHOLD);
+        let b = image_to_cells(&img.frame(), TextArtMode::Braille, DEFAULT_THRESHOLD);
         assert!(b.iter().flatten().all(|c| c.ch == '\u{28FF}'));
     }
 
     #[test]
     fn quadrant_single_subpixel_upper_left() {
         let mut img = solid(2, 2, [0, 0, 0, 255]);
-        img.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        img.put(0, 0, [255, 0, 0, 255]);
         // Pure red has luminance ~54; use an explicit lower threshold.
-        let cells = image_to_cells(&img, TextArtMode::Quadrant, 40);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Quadrant, 40);
         assert_eq!(cells[0][0].ch, '▘');
         assert_eq!(cells[0][0].rgb, [255, 0, 0]);
     }
@@ -284,13 +303,13 @@ mod tests {
     fn braille_dot_positions() {
         // dot 1 = (0,0), dot 8 = (1,3)
         let mut img = solid(2, 4, [0, 0, 0, 255]);
-        img.put_pixel(0, 0, Rgba([255, 255, 255, 255]));
-        let cells = image_to_cells(&img, TextArtMode::Braille, DEFAULT_THRESHOLD);
+        img.put(0, 0, [255, 255, 255, 255]);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Braille, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, '\u{2801}');
 
         let mut img = solid(2, 4, [0, 0, 0, 255]);
-        img.put_pixel(1, 3, Rgba([255, 255, 255, 255]));
-        let cells = image_to_cells(&img, TextArtMode::Braille, DEFAULT_THRESHOLD);
+        img.put(1, 3, [255, 255, 255, 255]);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Braille, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, '\u{2880}');
     }
 
@@ -298,14 +317,14 @@ mod tests {
     fn mixed_dim_cells_use_braille() {
         // Luminance ~97 (Lambert floor on the warm base) — lit but dim.
         let img = solid(2, 4, [97, 97, 97, 255]);
-        let cells = image_to_cells(&img, TextArtMode::Mixed, DEFAULT_THRESHOLD);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Mixed, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, '\u{28FF}');
     }
 
     #[test]
     fn mixed_bright_cells_use_quadrants() {
         let img = solid(2, 4, [230, 230, 230, 255]);
-        let cells = image_to_cells(&img, TextArtMode::Mixed, DEFAULT_THRESHOLD);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Mixed, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, '█');
     }
 
@@ -315,16 +334,16 @@ mod tests {
         // quadrant collapse must produce the left-half block.
         let mut img = solid(2, 4, [0, 0, 0, 255]);
         for y in 0..4 {
-            img.put_pixel(0, y, Rgba([255, 255, 255, 255]));
+            img.put(0, y, [255, 255, 255, 255]);
         }
-        let cells = image_to_cells(&img, TextArtMode::Mixed, DEFAULT_THRESHOLD);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Mixed, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, '▌');
     }
 
     #[test]
     fn mixed_unlit_cell_is_space() {
         let img = solid(2, 4, [0, 0, 0, 255]);
-        let cells = image_to_cells(&img, TextArtMode::Mixed, DEFAULT_THRESHOLD);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Mixed, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, ' ');
     }
 
@@ -332,7 +351,7 @@ mod tests {
     fn dark_pixels_stay_below_threshold() {
         // The sRGB-encoded clear color ≈ (63, 63, 73) must not light up.
         let img = solid(2, 2, [63, 63, 73, 255]);
-        let cells = image_to_cells(&img, TextArtMode::Quadrant, DEFAULT_THRESHOLD);
+        let cells = image_to_cells(&img.frame(), TextArtMode::Quadrant, DEFAULT_THRESHOLD);
         assert_eq!(cells[0][0].ch, ' ');
     }
 

@@ -1,45 +1,35 @@
-//! The host end of the six sinks.
+//! The host end of the six registration points.
 //!
-//! A module never allocates for the host and the host never parses the
-//! module's memory layout — registration is a callback per item, and each
-//! callback deep-copies. By the time an entry point returns, the host owes the
-//! image nothing but its function pointers.
+//! A module builds its registrations in its own memory and returns where they
+//! are; the host reads them and deep-copies out. The copy is what makes hot
+//! swap work — by the time these functions return, the host holds nothing that
+//! points into a library it might drop.
+//!
+//! The direction used to be the other way round, with the host handing in a
+//! callback per item. That could never work for wasm, where a host function
+//! pointer inside the module is a number naming nothing. Reading back works
+//! for both: on a `.so` the pointer is an address, on wasm the same integer is
+//! an offset into the module's linear memory.
 
 use crate::loader::Module;
 use crate::registry::{AssetDef, BufferDef, ControlDef, GraphDef, LayoutDef, StageDef};
 use anyhow::Result;
-use core::ffi::c_void;
-use libloading::Symbol;
-use se_abi::{
-    sym, AssetDesc, AssetSink, BufferDesc, BufferSink, ControlSink, ControlSpec, GraphDesc,
-    GraphSink, Layout, LayoutSink, StageSink, StageSpec,
-};
+use se_abi::{sym, AssetDesc, BufferDesc, ControlSpec, GraphDesc, Layout, StageSpec};
 
-macro_rules! sink {
-    ($fname:ident, $push:ident, $sink:ident, $abi:ident, $def:ident, $symbol:expr) => {
-        unsafe extern "C" fn $push(ctx: *mut c_void, item: *const $abi) {
-            let v = &mut *(ctx as *mut Vec<$def>);
-            v.push($def::from_abi(&*item));
-        }
-
+macro_rules! read {
+    ($fname:ident, $abi:ident, $def:ident, $symbol:expr) => {
         /// # Safety
-        /// `m` must stay loaded for as long as the result is used.
+        /// `m` must stay loaded for the duration of the call. Nothing in the
+        /// result borrows from it afterwards.
         pub unsafe fn $fname(m: &Module) -> Result<Vec<$def>> {
-            let f: Symbol<unsafe extern "C" fn(*mut $sink)> = m.sym($symbol)?;
-            let mut out: Vec<$def> = Vec::new();
-            let mut s = $sink {
-                ctx: &mut out as *mut Vec<$def> as *mut c_void,
-                push: $push,
-            };
-            f(&mut s);
-            Ok(out)
+            Ok(m.items::<$abi>($symbol)?.iter().map(|i| $def::from_abi(i)).collect())
         }
     };
 }
 
-sink!(layouts, push_layout, LayoutSink, Layout, LayoutDef, sym::LAYOUTS);
-sink!(buffers, push_buffer, BufferSink, BufferDesc, BufferDef, sym::BUFFERS);
-sink!(assets, push_asset, AssetSink, AssetDesc, AssetDef, sym::ASSETS);
-sink!(stages, push_stage, StageSink, StageSpec, StageDef, sym::STAGES);
-sink!(graphs, push_graph, GraphSink, GraphDesc, GraphDef, sym::GRAPH);
-sink!(controls, push_control, ControlSink, ControlSpec, ControlDef, sym::CONTROL);
+read!(layouts, Layout, LayoutDef, sym::LAYOUTS);
+read!(buffers, BufferDesc, BufferDef, sym::BUFFERS);
+read!(assets, AssetDesc, AssetDef, sym::ASSETS);
+read!(stages, StageSpec, StageDef, sym::STAGES);
+read!(graphs, GraphDesc, GraphDef, sym::GRAPH);
+read!(controls, ControlSpec, ControlDef, sym::CONTROL);

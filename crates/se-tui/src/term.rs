@@ -20,6 +20,14 @@ use std::time::{Duration, Instant};
 /// release is noticed within a frame or two.
 const HELD_FOR: Duration = Duration::from_millis(140);
 
+/// What the operator asked of a field being edited.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Edit {
+    Begin,
+    Commit,
+    Cancel,
+}
+
 /// IDE-level intents, handled by the host rather than passed to the game.
 #[derive(Default, Clone, Copy)]
 pub struct Intent {
@@ -35,6 +43,15 @@ pub struct Intent {
     /// `m` — cycle the viewport glyph set. Editor only: while a game runs,
     /// `m` is whatever that game decided it means.
     pub cycle_art: bool,
+    /// Right/Left on the Hierarchy: disclose the selected entity's components
+    /// or fold them away. `Some(true)` opens, `Some(false)` closes.
+    pub expand: Option<bool>,
+    /// Up/Down while the Inspector has focus — its own selection, not the
+    /// Hierarchy's.
+    pub inspect_select: i32,
+    pub edit: Option<Edit>,
+    pub type_char: Option<char>,
+    pub type_back: bool,
     /// A panel to focus, from ctrl+h/v/i/f/t or a mouse click.
     pub focus: Option<crate::state::Panel>,
     /// Where the mouse was pressed, for the host to resolve against panels.
@@ -99,6 +116,13 @@ pub struct Terminal {
     /// Set by the host before each poll. While playing, the keyboard is the
     /// game's and the IDE keeps only the keys that leave or switch a run.
     pub play: bool,
+    /// Set by the host while a field is being typed into. The keyboard is a
+    /// text box then: Esc cancels the edit instead of quitting, and no IDE
+    /// shortcut fires — an `n` in a number is a keystroke, not a game change.
+    pub typing: bool,
+    /// Whether the Inspector has focus, so Up/Down and Enter can mean its
+    /// selection rather than the Hierarchy's.
+    pub on_inspector: bool,
 }
 
 impl Terminal {
@@ -124,6 +148,8 @@ impl Terminal {
             swipe: 0,
             reload: false,
             intent: Intent::default(),
+            typing: false,
+            on_inspector: false,
             play: false,
         })
     }
@@ -190,6 +216,20 @@ impl Terminal {
             }
             return;
         }
+        // A field being edited swallows the keyboard. This sits ahead of the
+        // Esc branch on purpose: while typing, Esc means "never mind this
+        // value", and quitting the IDE instead would be a nasty surprise.
+        if self.typing {
+            match k.code {
+                KeyCode::Esc => self.intent.edit = Some(Edit::Cancel),
+                KeyCode::Enter => self.intent.edit = Some(Edit::Commit),
+                KeyCode::Backspace => self.intent.type_back = true,
+                KeyCode::Char(c) => self.intent.type_char = Some(c),
+                _ => {}
+            }
+            return;
+        }
+
         // Esc leaves a run; only in the editor does it quit.
         if k.code == KeyCode::Esc {
             if self.play {
@@ -248,8 +288,29 @@ impl Terminal {
                 self.intent.cycle_panel = true;
                 return;
             }
+            KeyCode::Up if self.on_inspector => {
+                self.intent.inspect_select = -1;
+                return;
+            }
+            KeyCode::Down if self.on_inspector => {
+                self.intent.inspect_select = 1;
+                return;
+            }
+            KeyCode::Enter if self.on_inspector => {
+                self.intent.edit = Some(Edit::Begin);
+                return;
+            }
             KeyCode::Up => self.intent.select = -1,
             KeyCode::Down => self.intent.select = 1,
+            // Unshifted, because shift+arrow is the swipe below.
+            KeyCode::Right | KeyCode::Enter if !k.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.intent.expand = Some(true);
+                return;
+            }
+            KeyCode::Left if !k.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.intent.expand = Some(false);
+                return;
+            }
             _ => {}
         }
 

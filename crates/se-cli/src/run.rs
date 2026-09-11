@@ -9,12 +9,13 @@
 
 use crate::build::{self, Engine};
 use crate::deck::Deck;
+use crate::inspect::{hierarchy, inspect, project_tree, commit_field, RowMap};
 use crate::session::Session;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RTerminal;
 use se_abi::{Frame, Input};
-use se_tui::{Areas, Ide, Mode, Node, Pixels, TextArtMode, Terminal};
+use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
 use std::time::{Duration, Instant};
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
@@ -37,90 +38,9 @@ fn open(deck: &Deck, engine: &Engine, opt: &Options, screen: (u32, u32)) -> Resu
 }
 
 /// The Project panel: the layout rule, as it stands on disk.
-fn project_tree(s: &Session) -> Vec<String> {
-    let mut out = vec![format!("v {}", s.bundle.name)];
-    out.push("  bundle/".into());
-    out.push("    data.rs".into());
-    out.push("    buffer.rs".into());
-    let mut cat = |name: &str, items: Vec<String>| {
-        if items.is_empty() {
-            return;
-        }
-        out.push(format!("  {name}/"));
-        for i in items {
-            out.push(format!("    {i}.so"));
-        }
-    };
-    cat("asset", s.bundle.assets.iter().map(|l| l.module.name.clone()).collect());
-    cat("process", s.bundle.process.iter().map(|l| l.module.name.clone()).collect());
-    cat("render", vec![s.bundle.render.module.name.clone()]);
-    cat("game", vec![s.bundle.control.module.name.clone()]);
-    out
-}
-
-/// The Hierarchy panel: what exists, and what each thing carries.
-fn hierarchy(s: &Session) -> Vec<Node> {
-    let names: Vec<String> = s.world.component_names().cloned().collect();
-    s.world
-        .entities()
-        .iter()
-        .enumerate()
-        .map(|(i, &e)| {
-            let mut components: Vec<String> = names
-                .iter()
-                .filter(|n| s.world.get(e, n).is_some())
-                .cloned()
-                .collect();
-            components.sort();
-            let label = match components.first() {
-                Some(first) => format!("{first} #{i}"),
-                None => format!("entity #{i}"),
-            };
-            Node { label, components }
-        })
-        .collect()
-}
-
-/// The Inspector panel: the selected entity's components, field by field,
-/// decoded from the *layout* rather than from any Rust type — the host has
-/// none, and that is exactly why this can show a component it has never seen.
-fn inspect(s: &Session, index: usize) -> Vec<(String, String)> {
-    let Some(&e) = s.world.entities().get(index) else { return Vec::new() };
-    let mut rows = Vec::new();
-    let mut names: Vec<String> = s.world.component_names().cloned().collect();
-    names.sort();
-    for name in names {
-        let Some(bytes) = s.world.get(e, &name) else { continue };
-        let Some(layout) = s.world.layout(&name) else { continue };
-        rows.push((format!("{name}:"), String::new()));
-        for f in &layout.fields {
-            rows.push((format!("  {}: ", f.name), field_text(bytes, f)));
-        }
-    }
-    rows
-}
-
-fn field_text(bytes: &[u8], f: &se_host::registry::FieldDef) -> String {
-    use se_abi::ScalarTy;
-    let mut parts = Vec::new();
-    for k in 0..f.count.min(4) {
-        let off = (f.offset + k * f.ty.size()) as usize;
-        let Some(b) = bytes.get(off..off + f.ty.size() as usize) else { break };
-        parts.push(match f.ty {
-            ScalarTy::F32 => format!("{:.3}", f32::from_le_bytes(b.try_into().unwrap())),
-            ScalarTy::F64 => format!("{:.3}", f64::from_le_bytes(b.try_into().unwrap())),
-            ScalarTy::I32 => i32::from_le_bytes(b.try_into().unwrap()).to_string(),
-            ScalarTy::U32 => u32::from_le_bytes(b.try_into().unwrap()).to_string(),
-            ScalarTy::U8 => b[0].to_string(),
-        });
-    }
-    if f.count > 4 {
-        parts.push("…".into());
-    }
-    parts.join(", ")
-}
 
 pub fn run(mut deck: Deck, engine: &Engine, opt: Options) -> Result<()> {
+    let mut row_map: RowMap = Vec::new();
     let mut term = Terminal::enter()?;
     let mut rt = RTerminal::new(CrosstermBackend::new(std::io::stdout()))?;
 
@@ -150,6 +70,8 @@ pub fn run(mut deck: Deck, engine: &Engine, opt: Options) -> Result<()> {
         // The router needs to know the mode before it reads a key: in the
         // editor the IDE owns the keyboard, while playing the game does.
         term.play = ide.mode.is_play();
+        term.typing = ide.editing.is_some();
+        term.on_inspector = ide.focused == se_tui::Panel::Inspector;
         term.poll()?;
         if term.quit {
             break;
@@ -170,6 +92,43 @@ pub fn run(mut deck: Deck, engine: &Engine, opt: Options) -> Result<()> {
         }
         if it.select != 0 {
             ide.move_selection(it.select);
+        }
+        if let Some(open) = it.expand {
+            ide.set_expanded(open);
+        }
+        if it.inspect_select != 0 {
+            ide.move_inspector(it.inspect_select);
+        }
+        if let Some(c) = it.type_char {
+            ide.edit_push(c);
+        }
+        if it.type_back {
+            ide.edit_backspace();
+        }
+        match it.edit {
+            Some(se_tui::Edit::Begin) => {
+                if !ide.begin_edit() {
+                    ide.note("nothing editable on that row");
+                }
+            }
+            Some(se_tui::Edit::Cancel) => {
+                ide.editing = None;
+            }
+            Some(se_tui::Edit::Commit) => {
+                if let Some((row, text)) = ide.take_edit() {
+                    match row_map.get(row).and_then(|m| m.clone()) {
+                        Some((comp, fi)) => {
+                            let sel = ide.selected;
+                            match commit_field(&mut session, sel, &comp, fi, &text) {
+                                Ok(field) => ide.note(format!("{comp}.{field} ← {text}")),
+                                Err(e) => ide.note(format!("edit refused: {e}")),
+                            }
+                        }
+                        None => ide.note("that row holds no value"),
+                    }
+                }
+            }
+            None => {}
         }
         if it.cycle_art {
             let name = ide.cycle_art();
@@ -285,7 +244,11 @@ pub fn run(mut deck: Deck, engine: &Engine, opt: Options) -> Result<()> {
         if ide.selected >= ide.hierarchy.len() {
             ide.selected = 0;
         }
-        ide.inspector = inspect(&session, ide.selected);
+        let (rows, map) = inspect(&session, ide.selected);
+        ide.inspector = rows;
+        ide.inspector_editable = map.iter().map(|m| m.is_some()).collect();
+        row_map = map;
+        ide.clamp_inspector();
         ide.project = project_tree(&session);
 
         let px = Pixels { width: picture.width, height: picture.height, rgba: &picture.rgba };
