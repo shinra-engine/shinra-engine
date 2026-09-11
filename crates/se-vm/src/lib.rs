@@ -10,6 +10,7 @@
 //! time, which is what lets one binary run any game — design.md: *像是短影音
 //! 左滑一下就換了一款遊戲的感覺*.
 
+pub mod input;
 pub mod memory;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod module;

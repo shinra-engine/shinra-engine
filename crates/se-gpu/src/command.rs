@@ -20,7 +20,7 @@ pub const END_PASS: u32 = 3;
 /// `render::command`, as this engine reads it.
 const COMMAND_FIELDS: [(&str, u32); 12] = [
     ("kind", 0),
-    ("colour", 4),
+    ("vertices", 4),
     ("shader", 8),
     ("column", 12),
     ("count", 16),
@@ -41,7 +41,9 @@ pub const FRAME_BYTES: u32 = 16;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Command {
     pub kind: u32,
-    pub colour: u32,
+    /// How many vertices the shader builds per instance. A render module knows
+    /// its own geometry; the host does not, and should not have to guess.
+    pub vertices: u32,
     pub shader: u32,
     pub column: u32,
     pub count: u32,
@@ -107,7 +109,7 @@ pub fn read(meta: &Meta, mem: &[u8]) -> Result<(Vec<Command>, u32)> {
         }
         out.push(Command {
             kind: u32_at(mem, c),
-            colour: u32_at(mem, c + 4),
+            vertices: u32_at(mem, c + 4),
             shader: u32_at(mem, c + 8),
             column: u32_at(mem, c + 12),
             count: u32_at(mem, c + 16),

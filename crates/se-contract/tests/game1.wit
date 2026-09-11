@@ -61,7 +61,8 @@ interface control {
 interface render {
   record command {
     kind: u32,
-    colour: u32,
+    /// Vertices the shader builds per instance.
+    vertices: u32,
     shader: u32,
     column: u32,
     count: u32,

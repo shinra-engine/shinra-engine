@@ -16,16 +16,38 @@ use anyhow::{bail, Result};
 use std::fmt::Write;
 
 const RESERVED: &[&str] = &[
+    // Keywords.
     "alias", "break", "case", "const", "const_assert", "continue", "continuing",
     "default", "diagnostic", "discard", "else", "enable", "false", "fn", "for",
     "if", "let", "loop", "override", "requires", "return", "struct", "switch",
     "true", "var", "while",
-    // Reserved for future use by the WGSL spec.
-    "as", "asm", "do", "enum", "extends", "filter", "goto", "handle", "impl",
-    "in", "inline", "macro", "match", "mut", "of", "out", "package", "priv",
-    "pub", "ref", "regardless", "static", "super", "target", "template",
-    "this", "trait", "try", "type", "typedef", "union", "unless", "using",
-    "virtual", "where", "yield",
+    // Reserved words. The whole list from the spec, not the handful that have
+    // bitten so far: `active` was not in the short version, and it cost a
+    // shader-compile error pointing at generated source instead of a message
+    // naming the field and the file to rename it in.
+    "NULL", "Self", "abstract", "active", "alignas", "alignof", "as", "asm",
+    "asm_fragment", "async", "attribute", "auto", "await", "become",
+    "binding_array", "cast", "catch", "class", "co_await", "co_return",
+    "co_yield", "coherent", "column_major", "common", "compile",
+    "compile_fragment", "concept", "const_cast", "consteval", "constexpr",
+    "constinit", "crate", "debugger", "decltype", "delete", "demote",
+    "demote_to_helper", "do", "dynamic_cast", "enum", "explicit", "export",
+    "extends", "extern", "external", "fallthrough", "filter", "final",
+    "finally", "friend", "from", "fxgroup", "get", "goto", "groupshared",
+    "highp", "impl", "implements", "import", "inline", "instanceof",
+    "interface", "layout", "lowp", "macro", "macro_rules", "match", "mediump",
+    "meta", "mod", "module", "move", "mut", "mutable", "namespace", "new",
+    "nil", "noexcept", "noinline", "nointerpolation", "non_coherent",
+    "noncoherent", "noperspective", "null", "nullptr", "of", "operator",
+    "package", "packoffset", "partition", "pass", "patch", "pixelfragment",
+    "precise", "precision", "premerge", "priv", "protected", "pub", "public",
+    "readonly", "ref", "regardless", "register", "reinterpret_cast", "require",
+    "resource", "restrict", "self", "set", "shared", "sizeof", "smooth",
+    "snorm", "static", "static_assert", "static_cast", "std", "subroutine",
+    "super", "target", "template", "this", "thread_local", "throw", "trait",
+    "try", "type", "typedef", "typeid", "typename", "typeof", "union",
+    "unless", "unorm", "unsafe", "unsized", "use", "using", "varying",
+    "virtual", "volatile", "wgsl", "where", "with", "writeonly", "yield",
     // Predeclared types and constructors that shadowing would break.
     "array", "atomic", "bool", "f16", "f32", "i32", "mat2x2", "mat3x3",
     "mat4x4", "ptr", "sampler", "texture_2d", "u32", "vec2", "vec3", "vec4",

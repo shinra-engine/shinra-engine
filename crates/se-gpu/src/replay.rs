@@ -126,7 +126,9 @@ impl Gpu {
                 match d.kind {
                     DRAW_INSTANCED => {
                         pass.set_vertex_buffer(0, self.instances.slice(..));
-                        pass.draw(0..3, 0..d.count);
+                        // Three is the fullscreen-triangle default, for a
+                        // module that names no geometry of its own.
+                        pass.draw(0..d.vertices.max(3), 0..d.count);
                     }
                     // Three vertices and no buffer: the shader builds the
                     // triangle. Clears, blits and post are this.

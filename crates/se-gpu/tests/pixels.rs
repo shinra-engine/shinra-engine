@@ -117,7 +117,7 @@ pub extern "C" fn record() -> u32 {
         let look = &*(arena::LOOK as *const Look);
         let n = look.bodies.min(pool(arena::POOL_BODIES).cap);
         let zero = Command {
-            kind: 0, colour: 0, shader: 0, column: u32::MAX, count: 0,
+            kind: 0, vertices: 0, shader: 0, column: u32::MAX, count: 0,
             uniform_off: 0, uniform_len: 0, pad: 0,
             clear_r: 0.0, clear_g: 0.0, clear_b: 0.0, clear_a: 1.0,
         };

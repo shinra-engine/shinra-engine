@@ -14,6 +14,7 @@
 //! addresses the contract fixed — which is why a module can be replaced
 //! between any two frames.
 
+use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
 use crate::module::Loaded;
 use crate::stages::{self, Stage};
@@ -176,6 +177,37 @@ impl Vm {
         Ok((rows, cmds))
     }
 
+    /// Hand the keyboard to the game.
+    ///
+    /// Checked against the contract the first time, field by field: a game
+    /// that spells `input` differently would otherwise be fed three bitmasks
+    /// at the wrong offsets and see keys nobody pressed.
+    pub fn set_input(&mut self, keys: Keys) -> Result<()> {
+        let Some((at, len)) = self.meta.control_at("input") else {
+            // A game that declares no `input` simply cannot be typed at. That
+            // is a choice its contract made, not an error here.
+            return Ok(());
+        };
+        if len != input::BYTES {
+            bail!("`control.input` is {len} bytes; this engine writes {}", input::BYTES)
+        }
+        let r = self
+            .meta
+            .record("input")
+            .context("the contract names an `input` control var but declares no record")?;
+        for (name, off) in input::FIELDS {
+            let f = r
+                .fields
+                .iter()
+                .find(|f| f.name.replace('-', "_") == name)
+                .with_context(|| format!("`control.input` has no `{name}`"))?;
+            if f.offset != off {
+                bail!("`control.input.{name}` is at {}; this engine writes {off}", f.offset)
+            }
+        }
+        self.write(at, &keys.to_bytes())
+    }
+
     /// Copy an asset's bytes into the blob region and publish its span.
     /// Variable length lives there; the record that names it does not grow.
     pub fn put_blob(&mut self, slot: u32, payload: &[u8]) -> Result<(u32, u32)> {
@@ -198,6 +230,17 @@ impl Vm {
     /// Put one back. The world resumes; the modules never knew.
     pub fn restore(&mut self, bytes: &[u8]) -> Result<()> {
         self.write(self.meta.base, bytes)
+    }
+
+    /// Record a frame without advancing one.
+    ///
+    /// The editor stands the scene still so it can be read, but the picture
+    /// has to stay live — a paused game you cannot see is not paused, it is
+    /// off. So the graph still records and the host still replays; only
+    /// control and the pipeline are skipped.
+    pub fn record_only(&mut self) -> Result<(u32, u32)> {
+        let cmds = self.call(Slot::Render, "record", None).context("render.wasm record")?;
+        Ok((0, cmds))
     }
 
     pub fn read(&self, at: u32, len: u32) -> Result<Vec<u8>> {
