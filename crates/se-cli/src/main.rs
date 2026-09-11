@@ -2,15 +2,22 @@
 //!
 //! ```text
 //! shinra build <game>              compile the contract and every module to .wasm
+//! shinra run   <game|deck>         build, then run it in the IDE
 //! shinra shot  <game> [-n N]       render N frames headless, write a PPM
 //! ```
+//!
+//! A directory whose children are games is a *deck*: `n` moves through it,
+//! which is what gametok means by a swipe.
 //!
 //! A game is a directory with `contract.wit` at its root and `asset/`,
 //! `process/`, `render/`, `game/` beside it. There is no project file to keep
 //! in sync with the tree.
 
 mod build;
+mod deck;
 mod discover;
+mod inspect;
+mod run;
 mod shot;
 
 use anyhow::{bail, Result};
@@ -21,6 +28,8 @@ const USAGE: &str = "\
 shinra — the Shinra Engine runner
 
   shinra build <game> [options]     compile contract.wit and every module to .wasm
+  shinra run   <game|deck> [opts]   build, then run it in the IDE
+                                    a directory of games is a deck; n moves through it
   shinra shot  <game> [options]     render headless, write a PPM to stdout
 
 options
@@ -94,6 +103,18 @@ fn out_dir(a: &Args, src: &GameSrc) -> PathBuf {
 
 fn main() -> Result<()> {
     let a = parse()?;
+    if a.cmd == "run" {
+        let deck = deck::Deck::open(&a.root)?;
+        return run::run(
+            deck,
+            run::Options {
+                profile: a.profile.clone(),
+                frames: if a.frames > 1 { Some(a.frames as u64) } else { None },
+                game: a.game.clone(),
+                render: a.render.clone(),
+            },
+        );
+    }
     let src = GameSrc::open(&a.root)?;
     let out = out_dir(&a, &src);
 

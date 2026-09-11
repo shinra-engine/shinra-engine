@@ -1,145 +1,151 @@
-//! Reading the world back out for the editor panels.
+//! The IDE's panels, built from the contract at run time.
 //!
-//! Everything here decodes from the *layout* rather than from any Rust type —
-//! the host has none — which is why the Inspector can show, and now edit, a
-//! component the engine has never seen. Split out of `run.rs` because the run
-//! loop is about ordering a frame and this is about describing one.
+//! Nothing here knows a game. The host compiled no `contract.rs`; it read
+//! `contract.wasm`, so it has every record's name, every field's name, type
+//! and offset, and where each column sits. That is enough to name and decode
+//! any value in any game's world — which is what makes one editor binary an
+//! editor for all of them.
+//!
+//! There is no entity to list. A pool is a run of rows and row `i` is row `i`
+//! in every column of it, so the Hierarchy is pools and their rows, and the
+//! Inspector is one row read across the columns that share its length.
 
-use crate::session::Session;
-use anyhow::{bail, Context, Result};
+use se_contract::layout::Ty;
 use se_tui::Node;
+use se_vm::Vm;
 
-pub fn project_tree(s: &Session) -> Vec<String> {
-    let mut out = vec![format!("v {}", s.bundle.name)];
-    out.push("  bundle/".into());
-    out.push("    data.rs".into());
-    out.push("    buffer.rs".into());
-    let mut cat = |name: &str, items: Vec<String>| {
-        if items.is_empty() {
-            return;
+/// Which `(column, field)` an Inspector row edits, or `None` for a heading.
+pub type RowMap = Vec<Option<(u32, usize)>>;
+
+/// Pools, then their rows. A pool with no rows still shows, because "the
+/// roster is empty" is a thing you need to be able to see.
+pub fn hierarchy(vm: &Vm) -> Vec<Node> {
+    let mut out = Vec::new();
+    for (pi, p) in vm.meta.pools.iter().enumerate() {
+        let len = vm.world.pool_len.get(pi).copied().unwrap_or(0);
+        let cap = vm.world.pool_cap.get(pi).copied().unwrap_or(0);
+        out.push(Node {
+            label: format!("{} [{len}/{cap}]", p.name),
+            components: Vec::new(),
+        });
+        for row in 0..len {
+            out.push(Node {
+                label: format!("  {}[{row}]", p.name),
+                components: p
+                    .columns
+                    .iter()
+                    .filter_map(|c| vm.meta.components.get(*c as usize))
+                    .map(|r| r.name.clone())
+                    .collect(),
+            });
         }
-        out.push(format!("  {name}/"));
-        for i in items {
-            out.push(format!("    {i}.so"));
-        }
-    };
-    cat("asset", s.bundle.assets.iter().map(|l| l.module.name.clone()).collect());
-    cat("process", s.bundle.process.iter().map(|l| l.module.name.clone()).collect());
-    cat("render", vec![s.bundle.render.module.name.clone()]);
-    cat("game", vec![s.bundle.control.module.name.clone()]);
+    }
+    if out.is_empty() {
+        out.push(Node { label: "(no pools)".into(), components: Vec::new() });
+    }
     out
 }
 
-/// The Hierarchy panel: what exists, and what each thing carries.
-pub fn hierarchy(s: &Session) -> Vec<Node> {
-    let names: Vec<String> = s.world.component_names().into_iter().map(String::from).collect();
-    s.world
-        .entities()
-        .iter()
-        .enumerate()
-        .map(|(i, &e)| {
-            let mut components: Vec<String> = names
-                .iter()
-                .filter(|n| s.world.get(e, n).is_some())
-                .cloned()
-                .collect();
-            components.sort();
-            let label = match components.first() {
-                Some(first) => format!("{first} #{i}"),
-                None => format!("entity #{i}"),
-            };
-            Node { label, components }
-        })
-        .collect()
+/// Which pool and row a Hierarchy line refers to, walking the same order
+/// `hierarchy` built.
+fn locate(vm: &Vm, selected: usize) -> Option<(usize, u32)> {
+    let mut i = 0usize;
+    for (pi, _) in vm.meta.pools.iter().enumerate() {
+        if i == selected {
+            return None; // the pool heading itself
+        }
+        i += 1;
+        let len = vm.world.pool_len.get(pi).copied().unwrap_or(0);
+        for row in 0..len {
+            if i == selected {
+                return Some((pi, row));
+            }
+            i += 1;
+        }
+    }
+    None
 }
 
-/// The Inspector panel: the selected entity's components, field by field,
-/// decoded from the *layout* rather than from any Rust type — the host has
-/// none, and that is exactly why this can show a component it has never seen.
-/// Which component and field an Inspector row stands for. The IDE never sees
-/// this — it draws strings — but the host needs it to turn typed text back
-/// into bytes.
-pub type RowMap = Vec<Option<(String, usize)>>;
+fn scalar(ty: Ty, b: &[u8]) -> String {
+    fn f32_at(b: &[u8], i: usize) -> f32 {
+        f32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]])
+    }
+    fn u32_at(b: &[u8], i: usize) -> u32 {
+        u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]])
+    }
+    match ty {
+        Ty::F32 => format!("{:.3}", f32_at(b, 0)),
+        Ty::U32 => format!("{}", u32_at(b, 0)),
+        Ty::I32 => format!("{}", u32_at(b, 0) as i32),
+        Ty::Vec(n) => {
+            let v: Vec<String> =
+                (0..n as usize).map(|k| format!("{:.3}", f32_at(b, k * 4))).collect();
+            format!("[{}]", v.join(", "))
+        }
+    }
+}
 
-pub fn inspect(s: &Session, index: usize) -> (Vec<(String, String)>, RowMap) {
-    let Some(&e) = s.world.entities().get(index) else { return (Vec::new(), Vec::new()) };
+/// One row of the world, read across every column of its pool.
+pub fn inspect(vm: &Vm, selected: usize) -> (Vec<(String, String)>, RowMap) {
     let mut rows = Vec::new();
     let mut map: RowMap = Vec::new();
-    let mut names: Vec<String> = s.world.component_names().into_iter().map(String::from).collect();
-    names.sort();
-    for name in names {
-        let Some(bytes) = s.world.get(e, &name) else { continue };
-        let Some(layout) = s.world.layout(&name) else { continue };
-        rows.push((format!("{name}:"), String::new()));
+
+    let Some((pi, row)) = locate(vm, selected) else {
+        // Not on a row: show the control var set instead, which is the other
+        // thing worth watching and the only thing a control module writes.
+        for c in &vm.meta.control {
+            rows.push((format!("{}", c.name), String::new()));
+            map.push(None);
+            let Some(rec) = vm.meta.record(&c.name) else { continue };
+            let Ok(bytes) = vm.read(c.at, c.len) else { continue };
+            for f in &rec.fields {
+                let at = f.offset as usize;
+                let val = bytes
+                    .get(at..at + f.ty.size() as usize)
+                    .map(|b| scalar(f.ty, b))
+                    .unwrap_or_else(|| "?".into());
+                rows.push((format!("  {}", f.name), val));
+                map.push(None);
+            }
+        }
+        return (rows, map);
+    };
+
+    let pool = &vm.meta.pools[pi];
+    for col in &pool.columns {
+        let Some(rec) = vm.meta.components.get(*col as usize) else { continue };
+        rows.push((rec.name.clone(), String::new()));
         map.push(None);
-        for (i, f) in layout.fields.iter().enumerate() {
-            rows.push((format!("  {}: ", f.name), field_text(bytes, f)));
-            // A field wider than the value column shows is not offered for
-            // editing: committing it would write back the truncation.
-            map.push((f.count <= 4).then(|| (name.clone(), i)));
+        let at = vm.world.row_at(*col, row);
+        let Ok(bytes) = vm.read(at, rec.size) else { continue };
+        for (fi, f) in rec.fields.iter().enumerate() {
+            let o = f.offset as usize;
+            let val = bytes
+                .get(o..o + f.ty.size() as usize)
+                .map(|b| scalar(f.ty, b))
+                .unwrap_or_else(|| "?".into());
+            rows.push((format!("  {}", f.name), val));
+            map.push(Some((*col, fi)));
         }
     }
     (rows, map)
 }
 
-/// Parse what was typed into a field and write it into the store.
-///
-/// Refuses rather than guesses: a row must supply exactly as many values as
-/// the field has, and each must parse as that field's scalar type. Half-writing
-/// a vector because the third component had a typo would be worse than saying
-/// so.
-pub fn commit_field(
-    s: &mut Session,
-    index: usize,
-    comp: &str,
-    fi: usize,
-    text: &str,
-) -> Result<String> {
-    use se_abi::ScalarTy;
-    let Some(&e) = s.world.entities().get(index) else { bail!("no such entity") };
-    let f = {
-        let layout = s.world.layout(comp).context("component is not declared")?;
-        layout.fields.get(fi).context("no such field")?.clone()
-    };
-    let parts: Vec<&str> = text.split(',').map(str::trim).filter(|p| !p.is_empty()).collect();
-    if parts.len() != f.count as usize {
-        bail!("`{}` takes {} value(s), got {}", f.name, f.count, parts.len());
-    }
-
-    let mut buf: Vec<u8> = Vec::with_capacity(f.count as usize * f.ty.size() as usize);
-    for p in &parts {
-        match f.ty {
-            ScalarTy::F32 => buf.extend_from_slice(&p.parse::<f32>()?.to_le_bytes()),
-            ScalarTy::F64 => buf.extend_from_slice(&p.parse::<f64>()?.to_le_bytes()),
-            ScalarTy::I32 => buf.extend_from_slice(&p.parse::<i32>()?.to_le_bytes()),
-            ScalarTy::U32 => buf.extend_from_slice(&p.parse::<u32>()?.to_le_bytes()),
-            ScalarTy::U8 => buf.push(p.parse::<u8>()?),
+/// The Project panel: the layout rule, as it stands on disk.
+pub fn project_tree(src: &crate::discover::GameSrc) -> Vec<String> {
+    let mut out = vec![format!("{}/", src.name), "  contract.wit".into()];
+    for cat in &src.categories {
+        if cat.modules.is_empty() {
+            continue;
+        }
+        let additive = crate::build::is_additive(&cat.name);
+        out.push(format!("  {}/{}", cat.name, if additive { "  (all of them)" } else { "  (one of)" }));
+        for m in &cat.modules {
+            out.push(format!("    {}.rs", m.name));
+        }
+        for sh in &cat.shared {
+            out.push(format!("    {sh}/  (shared)"));
         }
     }
-
-    let bytes = s.world.get_mut(e, comp).context("entity does not carry it")?;
-    let off = f.offset as usize;
-    let dst = bytes.get_mut(off..off + buf.len()).context("field runs past the component")?;
-    dst.copy_from_slice(&buf);
-    Ok(f.name)
-}
-
-pub fn field_text(bytes: &[u8], f: &se_host::registry::FieldDef) -> String {
-    use se_abi::ScalarTy;
-    let mut parts = Vec::new();
-    for k in 0..f.count.min(4) {
-        let off = (f.offset + k * f.ty.size()) as usize;
-        let Some(b) = bytes.get(off..off + f.ty.size() as usize) else { break };
-        parts.push(match f.ty {
-            ScalarTy::F32 => format!("{:.3}", f32::from_le_bytes(b.try_into().unwrap())),
-            ScalarTy::F64 => format!("{:.3}", f64::from_le_bytes(b.try_into().unwrap())),
-            ScalarTy::I32 => i32::from_le_bytes(b.try_into().unwrap()).to_string(),
-            ScalarTy::U32 => u32::from_le_bytes(b.try_into().unwrap()).to_string(),
-            ScalarTy::U8 => b[0].to_string(),
-        });
-    }
-    if f.count > 4 {
-        parts.push("…".into());
-    }
-    parts.join(", ")
+    out
 }
