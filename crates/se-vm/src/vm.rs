@@ -18,7 +18,7 @@ use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
 use crate::module::Loaded;
 use crate::stages::{self, Stage};
-use crate::world::{Meta, World};
+use crate::world::{Meta, World, SPAN_BYTES};
 use anyhow::{bail, Context, Result};
 use se_contract::read::Table;
 use wasmtime::{Engine, Memory, MemoryType, Store};
@@ -212,6 +212,43 @@ impl Vm {
     /// Variable length lives there; the record that names it does not grow.
     pub fn put_blob(&mut self, slot: u32, payload: &[u8]) -> Result<(u32, u32)> {
         self.world.put_blob(&self.meta, &self.memory, &mut self.store, slot, payload)
+    }
+
+    pub fn put_str(&mut self, slot: u32, s: &str) -> Result<(u32, u32)> {
+        self.put_blob(slot, s.as_bytes())
+    }
+
+    pub fn put_u32s(&mut self, slot: u32, v: &[u32]) -> Result<(u32, u32)> {
+        let b: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        self.put_blob(slot, &b)
+    }
+
+    pub fn put_f32s(&mut self, slot: u32, v: &[f32]) -> Result<(u32, u32)> {
+        let b: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+        self.put_blob(slot, &b)
+    }
+
+    /// The span of a blob slot, as published in the arena.
+    fn span(&self, slot: u32) -> Result<[u8; 8]> {
+        if slot >= self.meta.blob_slots {
+            bail!("blob slot {slot} is past the {} the contract declares", self.meta.blob_slots)
+        }
+        let v = self.read(self.meta.blobs_at + slot * SPAN_BYTES, SPAN_BYTES)?;
+        Ok(v.try_into().expect("read returns the length asked"))
+    }
+
+    /// The bytes a blob slot's span names.
+    pub fn blob(&self, slot: u32) -> Result<Vec<u8>> {
+        let s = self.span(slot)?;
+        let off = u32::from_le_bytes(s[..4].try_into().unwrap());
+        let len = u32::from_le_bytes(s[4..].try_into().unwrap());
+        self.read(off, len)
+    }
+
+    /// Copy a slot's span into a record field at arena address `at`.
+    pub fn set_span_field(&mut self, at: u32, slot: u32) -> Result<()> {
+        let s = self.span(slot)?;
+        self.write(at, &s)
     }
 
     /// Ask for a pool to hold `len` rows. Nothing spawns: a control var asks,

@@ -143,6 +143,9 @@ pub struct World {
     pub pool_of: Vec<u32>,
     /// First free byte after the columns: blob payloads go here.
     pub blob_top: u32,
+    /// Per blob slot: how many bytes its current region can hold, so a
+    /// re-put that fits rewrites in place instead of growing `blob_top`.
+    pub blob_cap: Vec<u32>,
 }
 
 fn w32(mem: &Memory, store: &mut Store<()>, at: u32, v: u32) -> Result<()> {
@@ -209,6 +212,7 @@ impl World {
             stride,
             pool_of,
             blob_top: at,
+            blob_cap: vec![0; m.blob_slots as usize],
         })
     }
 
@@ -249,12 +253,19 @@ impl World {
         if slot >= m.blob_slots {
             bail!("blob slot {slot} is past the {} the contract declares", m.blob_slots)
         }
-        let at = (self.blob_top + 15) & !15;
         let len = payload.len() as u32;
-        memory::check_heap(at, len)?;
-        mem.write(&mut *store, at as usize, payload)?;
-        self.blob_top = at + len;
         let d = m.blobs_at + slot * SPAN_BYTES;
+        let old = r32(mem, store, d)?;
+        let at = if len <= self.blob_cap[slot as usize] {
+            old
+        } else {
+            let at = (self.blob_top + 15) & !15;
+            memory::check_heap(at, len)?;
+            self.blob_top = at + len;
+            self.blob_cap[slot as usize] = len;
+            at
+        };
+        mem.write(&mut *store, at as usize, payload)?;
         w32(mem, store, d, at)?;
         w32(mem, store, d + 4, len)?;
         Ok((at, len))
