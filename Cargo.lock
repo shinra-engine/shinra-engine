@@ -1735,7 +1735,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ratatui",
- "se-abi",
  "se-contract",
  "se-gpu",
  "se-tui",
@@ -1803,7 +1802,6 @@ dependencies = [
  "crossterm 0.29.0",
  "libc",
  "ratatui",
- "se-abi",
 ]
 
 [[package]]

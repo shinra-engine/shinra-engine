@@ -6,12 +6,14 @@
 //! program with the panel turned on.
 
 pub mod ide;
+mod keys;
 pub mod present;
 pub mod state;
 pub mod textart;
 pub mod term;
 
 pub use ide::{draw, Areas, HELP};
+pub use keys::{key, Input, KEY_COUNT};
 pub use present::{pixel_size, Pixels};
 pub use state::{Ide, Mode, Node, Panel, PANEL_ORDER};
 pub use textart::{TextArtMode, TextCell};

@@ -12,7 +12,7 @@ use crossterm::event::{
     KeyModifiers, MouseEventKind,
 };
 use crossterm::terminal;
-use se_abi::{key, Input, KEY_COUNT};
+use crate::keys::{key, Input, KEY_COUNT};
 use std::time::{Duration, Instant};
 
 /// How long after its last press a key still counts as held. Comfortably

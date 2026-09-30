@@ -45,12 +45,12 @@ fn keys_of(t: &Terminal) -> Keys {
             }
         }
         for (code, bit) in [
-            (se_abi::key::SPACE, k::SPACE),
-            (se_abi::key::ENTER, k::ENTER),
-            (se_abi::key::LEFT, k::LEFT),
-            (se_abi::key::RIGHT, k::RIGHT),
-            (se_abi::key::UP, k::UP),
-            (se_abi::key::DOWN, k::DOWN),
+            (se_tui::key::SPACE, k::SPACE),
+            (se_tui::key::ENTER, k::ENTER),
+            (se_tui::key::LEFT, k::LEFT),
+            (se_tui::key::RIGHT, k::RIGHT),
+            (se_tui::key::UP, k::UP),
+            (se_tui::key::DOWN, k::DOWN),
         ] {
             if pick(code) {
                 m |= bit;

@@ -12,6 +12,5 @@ se-contract.workspace = true
 se-gpu.workspace = true
 se-vm.workspace = true
 se-tui.workspace = true
-se-abi.workspace = true
 ratatui.workspace = true
 anyhow.workspace = true
