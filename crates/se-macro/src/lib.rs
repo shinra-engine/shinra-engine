@@ -1,44 +1,30 @@
 //! Proc macros behind the `se` facade. Nothing here is meant to be used
 //! directly — depend on `se` and reach them as `se::Schema` / `#[se::stage]`.
 
-use quote::{format_ident, quote};
-use syn::punctuated::Punctuated;
-use syn::{parse_macro_input, DeriveInput, Ident, ItemFn, Token};
+use quote::quote;
+use syn::{parse_macro_input, ItemFn};
 
-mod components;
-mod schema;
 mod stage;
 
-/// Describe a `#[repr(C)]` struct to the host so it can be stored, saved and
-/// fed to a render pass without the host ever knowing the Rust type.
-#[proc_macro_derive(Schema)]
-pub fn derive_schema(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    schema::derive(input)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+const GONE: &str = "components are declared in contract.wit, not in Rust — \
+     add the record there and `shinra build` generates the type";
+
+fn gone() -> proc_macro2::TokenStream {
+    quote! { compile_error!(#GONE); }
 }
 
-/// `bundle/data.rs` — declare components and register them in one act.
-///
-/// ```ignore
-/// se::components! {
-///     Transform { pos: [f32; 3], rot: [f32; 4], scale: [f32; 3] }
-///     Body { vel: [f32; 3] }
-/// }
-/// ```
-///
-/// Each becomes a `#[repr(C)]`, `#[derive(Clone, Copy, Debug, se::Schema)]`
-/// `pub struct`, and the whole block emits one `se_register_layouts` covering
-/// all of them — there is no second list to keep in step. A field the host
-/// cannot describe, or whose name is a WGSL reserved word, is refused here
-/// rather than at first draw.
+/// Removed: a component is declared in `contract.wit`. Expands to a
+/// `compile_error!` that says so.
+#[proc_macro_derive(Schema)]
+pub fn derive_schema(_input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    gone().into()
+}
+
+/// Removed: a component is declared in `contract.wit`. Expands to a
+/// `compile_error!` that says so.
 #[proc_macro]
-pub fn components(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
-    let items = parse_macro_input!(input as components::Components);
-    components::components(items)
-        .unwrap_or_else(syn::Error::into_compile_error)
-        .into()
+pub fn components(_input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    gone().into()
 }
 
 /// Make a function a stage: its parameter list becomes its query.
@@ -61,3 +47,13 @@ pub fn stage(
         .into()
 }
 
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn stub_message() {
+        let out = super::gone().to_string();
+        assert!(out.contains("compile_error"));
+        assert!(out.contains("contract.wit"));
+    }
+}

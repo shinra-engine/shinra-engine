@@ -34,10 +34,10 @@
 /// loop that runs the body over every row of the pool.
 pub use se_macro::stage;
 
-/// `#[derive(se::Schema)]` — deprecated on this route.
+/// `#[derive(se::Schema)]` and `se::components!` — removed.
 ///
-/// A component is declared in `contract.wit` and generated, so deriving one
-/// from a Rust struct would be the second place its shape is written down.
-/// Kept only so an old module fails with this message rather than an unknown
-/// attribute.
-pub use se_macro::Schema;
+/// A component is declared in `contract.wit` and generated, so declaring one
+/// from Rust would be the second place its shape is written down. Kept only so
+/// an old module fails with a message naming `contract.wit` rather than an
+/// unknown macro.
+pub use se_macro::{components, Schema};
