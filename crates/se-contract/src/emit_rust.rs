@@ -161,11 +161,64 @@ fn emit_vertex(out: &mut String, c: &Contract) {
     }
 }
 
+/// How a module turns a `Span` into something it can read. The check is against
+/// the memory the module is running in, so a stale or hostile span reads as
+/// empty instead of past the end. Off wasm32 there is no memory to read, so
+/// every span is empty there — the file still compiles for the host.
+const SPAN_IMPL: &str = "\
+#[allow(dead_code)]
+impl Span {
+    pub const EMPTY: Span = Span { off: 0, len: 0 };
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    #[cfg(target_arch = \"wasm32\")]
+    fn memory_bytes() -> u64 {
+        core::arch::wasm32::memory_size(0) as u64 * 65536
+    }
+
+    #[cfg(not(target_arch = \"wasm32\"))]
+    fn memory_bytes() -> u64 {
+        0
+    }
+
+    /// The bytes, or an empty slice when `off + len` is past the memory.
+    pub unsafe fn bytes(&self) -> &'static [u8] {
+        if self.len == 0 || self.off as u64 + self.len as u64 > Self::memory_bytes() {
+            return &[];
+        }
+        core::slice::from_raw_parts(self.off as usize as *const u8, self.len as usize)
+    }
+
+    /// The bytes as text, or `None` when they are not UTF-8.
+    pub unsafe fn as_str(&self) -> Option<&'static str> {
+        core::str::from_utf8(self.bytes()).ok()
+    }
+
+    /// The bytes as a list of `T`. Empty when `off` is not aligned for `T`; a
+    /// trailing partial element is dropped.
+    pub unsafe fn list<T: Copy>(&self) -> &'static [T] {
+        let (size, align) = (core::mem::size_of::<T>(), core::mem::align_of::<T>());
+        if size == 0 || self.off as usize % align != 0 {
+            return &[];
+        }
+        let b = self.bytes();
+        core::slice::from_raw_parts(b.as_ptr() as *const T, b.len() / size)
+    }
+}
+
+";
+
 pub fn emit(c: &Contract, m: &Map) -> String {
     let mut out = String::from(HEADER);
     out.push('\n');
     for r in &c.records {
         emit_record(&mut out, r);
+    }
+    if c.of("handles").any(|r| r.name == "span") {
+        out.push_str(SPAN_IMPL);
     }
     emit_arena(&mut out, c, m);
     emit_pools(&mut out, c);
