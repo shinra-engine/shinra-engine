@@ -54,6 +54,7 @@ fn vertex_format(ty: Ty) -> Result<wgpu::VertexFormat> {
         Ty::Vec(4) => wgpu::VertexFormat::Float32x4,
         Ty::I32 => wgpu::VertexFormat::Sint32,
         Ty::U32 => wgpu::VertexFormat::Uint32,
+        Ty::Span => wgpu::VertexFormat::Uint32x2,
         other => bail!("no vertex format for {other:?}"),
     })
 }

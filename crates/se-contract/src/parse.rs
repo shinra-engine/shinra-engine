@@ -77,13 +77,31 @@ fn resolve_ty(resolve: &Resolve, t: &Type) -> Result<Ty> {
         Type::F32 => Ok(Ty::F32),
         Type::S32 => Ok(Ty::I32),
         Type::U32 => Ok(Ty::U32),
+        Type::String => Ok(Ty::Span),
         Type::Id(id) => {
             let id = chase(resolve, *id)?;
             let td = &resolve.types[id];
             let name = td.name.clone().unwrap_or_default();
+            if let TypeDefKind::List(elem) = &td.kind {
+                return match resolve_ty(resolve, elem)? {
+                    Ty::Span => bail!(
+                        "a `list` of `string`, `list` or `span` is refused: its elements \
+                         would be spans, and a span points at flat bytes only"
+                    ),
+                    _ => Ok(Ty::Span),
+                };
+            }
             let TypeDefKind::Record(r) = &td.kind else {
                 bail!("`{name}` is not a record; a contract field must be a scalar or a vec")
             };
+            if name == "span"
+                && r.fields.len() == 2
+                && r.fields[0].name == "off"
+                && r.fields[1].name == "len"
+                && r.fields.iter().all(|f| f.ty == Type::U32)
+            {
+                return Ok(Ty::Span);
+            }
             if !r.fields.iter().all(|f| f.ty == Type::F32) {
                 bail!("`{name}` is nested in a field but is not a vector of f32")
             }
@@ -96,9 +114,9 @@ fn resolve_ty(resolve: &Resolve, t: &Type) -> Result<Ty> {
             }
         }
         other => bail!(
-            "{other:?} has no contract layout. The contract carries no pointer, no \
-             `usize`, no `list` and no `string`: those differ between wasm32 and the \
-             host, and variable length belongs behind a `span`"
+            "{other:?} has no contract layout. The contract carries no pointer and no \
+             `usize`: those differ between wasm32 and the host. Variable length is a \
+             `string`, a `list` or a `span`"
         ),
     }
 }
@@ -168,7 +186,24 @@ pub fn parse(path: &Path) -> Result<Contract> {
 
     let contract = Contract { records, pools };
     check_pools(&contract)?;
+    check_span_declared(&contract)?;
     Ok(contract)
+}
+
+/// The generated Rust names `Span`, and the host checks `handles.span` at
+/// load, so a record that carries one needs the handle declared.
+fn check_span_declared(c: &Contract) -> Result<()> {
+    if c.of("handles").any(|r| r.name == "span") {
+        return Ok(());
+    }
+    if let Some(r) = c.records.iter().find(|r| r.fields.iter().any(|f| f.ty == Ty::Span)) {
+        bail!(
+            "record `{}` carries a string/list/span field but `interface handles` \
+             declares no `record span {{ off: u32, len: u32 }}`",
+            r.name
+        );
+    }
+    Ok(())
 }
 
 /// A pool may only name components, and every component should belong to

@@ -18,12 +18,14 @@ pub enum Ty {
     U32,
     /// `vec2`/`vec3`/`vec4` of `f32`.
     Vec(u32),
+    /// `(off, len)` into the blob heap: what `string` and `list<T>` lower to.
+    Span,
 }
 
 impl Ty {
     pub const fn align(self) -> u32 {
         match self {
-            Ty::F32 | Ty::I32 | Ty::U32 => 4,
+            Ty::F32 | Ty::I32 | Ty::U32 | Ty::Span => 4,
             Ty::Vec(2) => 8,
             // vec3 and vec4 both align to 16. vec3's size does not follow.
             Ty::Vec(_) => 16,
@@ -34,6 +36,7 @@ impl Ty {
         match self {
             Ty::F32 | Ty::I32 | Ty::U32 => 4,
             Ty::Vec(n) => 4 * n,
+            Ty::Span => 8,
         }
     }
 
@@ -43,6 +46,7 @@ impl Ty {
             Ty::I32 => "i32".into(),
             Ty::U32 => "u32".into(),
             Ty::Vec(n) => format!("[f32; {n}]"),
+            Ty::Span => "Span".into(),
         }
     }
 
@@ -52,6 +56,7 @@ impl Ty {
             Ty::I32 => "i32".into(),
             Ty::U32 => "u32".into(),
             Ty::Vec(n) => format!("vec{n}<f32>"),
+            Ty::Span => "vec2<u32>".into(),
         }
     }
 
@@ -59,6 +64,7 @@ impl Ty {
     pub const fn lanes(self) -> u32 {
         match self {
             Ty::Vec(n) => n,
+            Ty::Span => 2,
             _ => 1,
         }
     }

@@ -49,6 +49,7 @@ pub const fn ty_code(t: Ty) -> u32 {
         Ty::F32 => 0,
         Ty::I32 => 1,
         Ty::U32 => 2,
+        Ty::Span => 3,
         Ty::Vec(n) => 2 + n,
     }
 }
@@ -58,6 +59,7 @@ pub fn ty_of_code(c: u32) -> Option<Ty> {
         0 => Ty::F32,
         1 => Ty::I32,
         2 => Ty::U32,
+        3 => Ty::Span,
         4..=6 => Ty::Vec(c - 2),
         _ => return None,
     })

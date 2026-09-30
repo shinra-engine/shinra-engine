@@ -83,6 +83,7 @@ fn scalar(ty: Ty, b: &[u8]) -> String {
         Ty::F32 => format!("{:.3}", f32_at(b, 0)),
         Ty::U32 => format!("{}", u32_at(b, 0)),
         Ty::I32 => format!("{}", u32_at(b, 0) as i32),
+        Ty::Span => format!("span({}, {})", u32_at(b, 0), u32_at(b, 4)),
         Ty::Vec(n) => {
             let v: Vec<String> =
                 (0..n as usize).map(|k| format!("{:.3}", f32_at(b, k * 4))).collect();
