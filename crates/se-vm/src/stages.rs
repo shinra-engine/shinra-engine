@@ -15,9 +15,9 @@ use anyhow::{bail, Result};
 
 /// Resolve each parameter to a column, and refuse anything that does not fit.
 ///
-/// `se-host/src/schedule.rs` did this against a `Store`; the check is the same
-/// one and the reason is the same, but what it checks against is now the
-/// contract table, because there is no store left to ask.
+/// The old host did this against a `Store`; the check is the same one and the
+/// reason is the same, but what it checks against is now the contract table,
+/// because there is no store left to ask.
 pub fn resolve(stages: &mut [Stage], meta: &Meta) -> Result<()> {
     for s in stages.iter_mut() {
         if s.params.is_empty() {

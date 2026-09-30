@@ -1,14 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/se-abi",
     "crates/se-contract",
     "crates/se-vm",
     "crates/se-gpu",
     "crates/se-macro",
     "crates/se",
-    "crates/se-host",
-    "crates/se-render",
     "crates/se-tui",
     "crates/se-cli",
 ]
@@ -18,14 +15,11 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace.dependencies]
-se-abi   = { path = "crates/se-abi" }
 se-contract = { path = "crates/se-contract" }
 se-vm    = { path = "crates/se-vm" }
 se-gpu   = { path = "crates/se-gpu" }
 se-macro = { path = "crates/se-macro" }
 se       = { path = "crates/se" }
-se-host  = { path = "crates/se-host" }
-se-render = { path = "crates/se-render" }
 se-tui   = { path = "crates/se-tui" }
 
 anyhow     = "1"
@@ -33,7 +27,6 @@ wit-parser = "0.221"
 wasmtime   = "38"
 wgpu       = "27"
 pollster   = "0.3"
-bytemuck   = { version = "1", features = ["derive"] }
 # png only: the engine reads images assets publish, it is not an image library
 image      = { version = "0.25", default-features = false, features = ["png"] }
 crossterm  = "0.29"

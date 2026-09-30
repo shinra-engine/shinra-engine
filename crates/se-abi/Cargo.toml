@@ -1,4 +1,0 @@
-[package]
-name = "se-abi"
-version.workspace = true
-edition.workspace = true

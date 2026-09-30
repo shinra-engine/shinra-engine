@@ -33,8 +33,8 @@ pub struct Vm {
     process: Option<Loaded>,
     render: Option<Loaded>,
     /// The stages the current process module declared, in the order it listed
-    /// them. Order is a declaration, not a consequence of filenames — which is
-    /// what `se-web/src/stage.rs:113` had to settle by sorting paths.
+    /// them. Order is a declaration, not a consequence of filenames, so no
+    /// path sorting is needed to settle it.
     stages: Vec<Stage>,
 }
 

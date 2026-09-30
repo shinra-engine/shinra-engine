@@ -7,8 +7,8 @@
 //! The reserved-word gate is the useful part. A field name comes from
 //! contract.wit, so a collision produces a shader that will not parse and an
 //! error pointing at generated source the author never wrote. Refusing early,
-//! by name, is far kinder — `se-render/src/attrs.rs` refuses the same way, and
-//! this list is its list.
+//! by name, is far kinder, and this list is the
+//! one the renderer refuses by.
 
 use crate::parse::Contract;
 use crate::{snake, upper_camel};
