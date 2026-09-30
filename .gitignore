@@ -6,7 +6,6 @@
 target/
 # `shinra build` writes the contract and every module here.
 target/shinra/
-tests/snapshots/
 *.png
 .tmp/
 /.browser/
@@ -14,9 +13,5 @@ tests/snapshots/
 *.swo
 .DS_Store
 .claude/
-vscode-ext/out/
-node_modules/
-vscode-ext/node_modules/
-dist/
 web/games/
 web/pkg/

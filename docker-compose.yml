@@ -53,20 +53,5 @@ services:
       - cargo:/cargo
     working_dir: /engine
 
-  # The Svelte + Tauri GUI, kept from the original tree.
-  gui:
-    profiles: ["gui"]
-    build:
-      context: ./frontend/gui
-      network: host
-    ports:
-      - "1420:1420"
-    command: npm run dev -- --host 0.0.0.0
-    tty: true
-    stdin_open: true
-    volumes:
-      - ./frontend/gui:/app
-      - /app/node_modules
-
 volumes:
   cargo:
