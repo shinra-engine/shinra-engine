@@ -35,20 +35,25 @@ impl Binding {
     }
 }
 
-/// `Transform` -> `transform`. WIT spells a record in kebab-case and the
-/// generator snakes it; a Rust type name upper-camels the same word, so the
-/// journey back is one lowercase for a single word and an underscore between
-/// humps for more.
-fn wit_name(ident: &Ident) -> String {
+/// `OnGround` -> `on-ground`: the WIT record name, which is what the contract
+/// table and so the `se.stages` entry must carry. Names must be plain
+/// lower-kebab words; an acronym or digit (`Http2Req`) does not round-trip.
+fn kebab_name(ident: &Ident) -> String {
     let s = ident.to_string();
     let mut out = String::with_capacity(s.len() + 2);
     for (i, c) in s.chars().enumerate() {
         if c.is_uppercase() && i != 0 {
-            out.push('_');
+            out.push('-');
         }
         out.extend(c.to_lowercase());
     }
     out
+}
+
+/// `OnGround` -> `COL_ON_GROUND`, the constant the contract emitter writes.
+fn col_ident(ident: &Ident) -> Ident {
+    let name = kebab_name(ident).replace('-', "_").to_uppercase();
+    Ident::new(&format!("COL_{name}"), Span::call_site())
 }
 
 fn component_of(ty: &Type) -> Result<Ident> {
@@ -102,7 +107,7 @@ pub fn stage(f: ItemFn) -> Result<TokenStream> {
                 Binding::Read(_) => se_contract::stages::READ,
                 Binding::Write(_) => se_contract::stages::WRITE,
             };
-            (wit_name(b.ty()), access)
+            (kebab_name(b.ty()), access)
         })
         .collect();
     let refs: Vec<(&str, u32)> = params.iter().map(|(n, a)| (n.as_str(), *a)).collect();
@@ -118,7 +123,7 @@ pub fn stage(f: ItemFn) -> Result<TokenStream> {
     for (i, b) in bindings.iter().enumerate() {
         let c = format_ident!("se_c{i}");
         let ty = b.ty();
-        let col = Ident::new(&format!("COL_{}", wit_name(ty).to_uppercase()), Span::call_site());
+        let col = col_ident(ty);
         lets.push(quote! { let #c = crate::se_col(crate::arena::#col); });
         args.push(match b {
             Binding::Read(_) => quote! { &*crate::se_row::<#ty>(&#c, se_i) },
@@ -157,4 +162,25 @@ pub fn stage(f: ItemFn) -> Result<TokenStream> {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn id(s: &str) -> Ident {
+        Ident::new(s, Span::call_site())
+    }
+
+    #[test]
+    fn single_word() {
+        assert_eq!(kebab_name(&id("Transform")), "transform");
+        assert_eq!(col_ident(&id("Transform")).to_string(), "COL_TRANSFORM");
+    }
+
+    #[test]
+    fn multi_word_is_kebab_for_wit_and_snake_upper_for_col() {
+        assert_eq!(kebab_name(&id("OnGround")), "on-ground");
+        assert_eq!(col_ident(&id("OnGround")).to_string(), "COL_ON_GROUND");
+    }
 }
