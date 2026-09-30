@@ -85,7 +85,7 @@ fn emit_arena(out: &mut String, c: &Contract, m: &Map) {
     let _ = writeln!(out, "    pub const STACK_SIZE: u32 = BASE;");
     for r in &m.control {
         let _ = writeln!(out, "    /// `interface control` — {} bytes.", r.len);
-        let _ = writeln!(out, "    pub const {}: u32 = 0x{:08x};", r.name.to_uppercase(), r.at);
+        let _ = writeln!(out, "    pub const {}: u32 = 0x{:08x};", snake(&r.name).to_uppercase(), r.at);
     }
     out.push_str("    /// `render::frame`, rewritten by render.wasm each frame.\n");
     let _ = writeln!(out, "    pub const FRAME: u32 = 0x{:08x};", m.frame);
@@ -104,13 +104,13 @@ fn emit_arena(out: &mut String, c: &Contract, m: &Map) {
 
     out.push_str("\n    /// Index into the column table.\n");
     for (i, r) in c.components().iter().enumerate() {
-        let _ = writeln!(out, "    pub const COL_{}: u32 = {i};", r.name.to_uppercase());
+        let _ = writeln!(out, "    pub const COL_{}: u32 = {i};", snake(&r.name).to_uppercase());
     }
     let _ = writeln!(out, "    pub const N_COLUMNS: u32 = {};", c.components().len());
 
     out.push_str("\n    /// Index into the pool table.\n");
     for (i, p) in c.pools.iter().enumerate() {
-        let _ = writeln!(out, "    pub const POOL_{}: u32 = {i};", p.name.to_uppercase());
+        let _ = writeln!(out, "    pub const POOL_{}: u32 = {i};", snake(&p.name).to_uppercase());
     }
     let _ = writeln!(out, "    pub const N_POOLS: u32 = {};", c.pools.len());
     out.push_str("}\n\n");
@@ -126,7 +126,7 @@ fn emit_pools(out: &mut String, c: &Contract) {
             .iter()
             .map(|name| {
                 let i = cols.iter().position(|r| &r.name == name).expect("checked");
-                format!("arena::COL_{}", cols[i].name.to_uppercase())
+                format!("arena::COL_{}", snake(&cols[i].name).to_uppercase())
             })
             .collect();
         let _ = writeln!(
@@ -137,7 +137,7 @@ fn emit_pools(out: &mut String, c: &Contract) {
         );
         let _ = writeln!(out, "#[allow(dead_code)]\npub mod pool_{} {{", snake(&p.name));
         let _ = writeln!(out, "    use super::arena;");
-        let _ = writeln!(out, "    pub const INDEX: u32 = arena::POOL_{};", p.name.to_uppercase());
+        let _ = writeln!(out, "    pub const INDEX: u32 = arena::POOL_{};", snake(&p.name).to_uppercase());
         let _ = writeln!(out, "    pub const COLUMNS: [u32; {}] = [{}];", idx.len(), idx.join(", "));
         out.push_str("}\n\n");
     }
