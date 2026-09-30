@@ -11,6 +11,10 @@
 # rebuild each time.
 FROM rust:1.93-bookworm
 
+# Game modules are wasm: se-cli builds the engine's `se` crate and every bundle
+# for wasm32-unknown-unknown, so ide, shot and build-examples all need it.
+RUN rustup target add wasm32-unknown-unknown
+
 # mesa-vulkan-drivers + libvulkan1 give lavapipe: software Vulkan, so wgpu
 # renders with no GPU and no /dev/dri. This is a supported configuration for
 # this engine, not a fallback — it never opens a window.
