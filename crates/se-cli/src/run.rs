@@ -287,7 +287,13 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         ide.inspector_editable = map.iter().map(|m| m.is_some()).collect();
         row_map = map;
         ide.clamp_inspector();
-        ide.project = project_tree(deck.src());
+        let active: Vec<(String, String)> = [("game", opt.game.as_deref()), ("render", opt.render.as_deref())]
+            .into_iter()
+            .filter_map(|(c, w)| {
+                pick(deck.src(), Path::new(""), c, w).map(|(n, _)| (c.to_string(), n))
+            })
+            .collect();
+        ide.project = project_tree(deck.src(), &active).0;
 
         let picture = px.unwrap_or_default();
         let shown = Pixels { width: screen.0, height: screen.1, rgba: &picture };

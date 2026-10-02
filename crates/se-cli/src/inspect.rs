@@ -137,21 +137,81 @@ pub fn inspect(vm: &Vm, selected: usize) -> (Vec<(String, String)>, Vec<Option<T
     (rows, map)
 }
 
-/// The Project panel: the layout rule, as it stands on disk.
-pub fn project_tree(src: &crate::discover::GameSrc) -> Vec<String> {
+/// The Project panel: the layout rule, as it stands on disk. Alongside each
+/// line goes the `(category, module)` it names, for the rows that can be
+/// swapped (game and render) and `None` for everything else.
+pub fn project_tree(
+    src: &crate::discover::GameSrc,
+    active: &[(String, String)],
+) -> (Vec<String>, Vec<Option<(String, String)>>) {
     let mut out = vec![format!("{}/", src.name), "  contract.wit".into()];
+    let mut ids: Vec<Option<(String, String)>> = vec![None, None];
     for cat in &src.categories {
         if cat.modules.is_empty() {
             continue;
         }
-        let additive = crate::build::is_additive(&cat.name);
-        out.push(format!("  {}/{}", cat.name, if additive { "  (all of them)" } else { "  (one of)" }));
+        let choose = !crate::build::is_additive(&cat.name) && cat.name != "asset";
+        out.push(format!("  {}/{}", cat.name, if choose { "  (one of)" } else { "  (all of them)" }));
+        ids.push(None);
         for m in &cat.modules {
-            out.push(format!("    {}.rs", m.name));
+            let on = choose && active.iter().any(|(c, n)| *c == cat.name && *n == m.name);
+            out.push(format!("    {}.rs{}", m.name, if on { "  <-" } else { "" }));
+            ids.push(choose.then(|| (cat.name.clone(), m.name.clone())));
         }
         for sh in &cat.shared {
             out.push(format!("    {sh}/  (shared)"));
+            ids.push(None);
         }
     }
-    out
+    (out, ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::discover::GameSrc;
+
+    fn tree(name: &str, files: &[&str]) -> GameSrc {
+        let root = std::env::temp_dir().join(format!("se-inspect-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("contract.wit"), "").unwrap();
+        for f in files {
+            let p = root.join(f);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "").unwrap();
+        }
+        GameSrc::open(&root).unwrap()
+    }
+
+    fn act(c: &str, n: &str) -> Vec<(String, String)> {
+        vec![(c.into(), n.into())]
+    }
+
+    #[test]
+    fn render_rows_carry_identity_and_one_marker() {
+        let src = tree("render", &["render/solid.rs", "render/ghost.rs"]);
+        let (lines, ids) = project_tree(&src, &act("render", "solid"));
+        assert_eq!(lines.len(), ids.len());
+        assert_eq!(ids.iter().flatten().count(), 2);
+        let marked: Vec<_> = lines.iter().zip(&ids).filter(|(l, _)| l.ends_with("<-")).collect();
+        assert_eq!(marked.len(), 1);
+        assert_eq!(marked[0].1, &Some(("render".to_string(), "solid".to_string())));
+    }
+
+    #[test]
+    fn process_rows_are_never_swappable() {
+        let src = tree("process", &["process/a.rs", "process/b.rs"]);
+        let (lines, ids) = project_tree(&src, &act("process", "a"));
+        assert_eq!(lines.len(), ids.len());
+        assert!(ids.iter().all(|i| i.is_none()));
+        assert!(lines.iter().all(|l| !l.ends_with("<-")));
+    }
+
+    #[test]
+    fn a_lone_game_module_is_still_listed() {
+        let src = tree("game", &["game/g.rs"]);
+        let (_, ids) = project_tree(&src, &act("game", "g"));
+        assert_eq!(ids.iter().flatten().count(), 1);
+    }
 }
