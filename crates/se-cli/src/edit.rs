@@ -1,7 +1,9 @@
 //! Operator text back to field bytes: the inverse of `inspect::scalar`.
 
 use anyhow::{anyhow, bail, Result};
+use crate::inspect::Target;
 use se_contract::layout::Ty;
+use se_vm::Vm;
 
 fn name(ty: Ty) -> String {
     match ty {
@@ -50,6 +52,27 @@ pub fn encode(ty: Ty, text: &str) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Encode `text` and write it over the target field, and nothing else. Every
+/// check comes before the write, so a failure leaves the arena as it was.
+pub fn commit(vm: &mut Vm, target: &Target, text: &str) -> Result<()> {
+    let rec = vm
+        .meta
+        .components
+        .get(target.col as usize)
+        .ok_or_else(|| anyhow!("no column {}", target.col))?;
+    let f = rec
+        .fields
+        .get(target.field)
+        .ok_or_else(|| anyhow!("{} has no field {}", rec.name, target.field))?;
+    if f.offset as u64 + f.ty.size() as u64 > rec.size as u64 {
+        bail!("{}.{} does not fit in {} bytes", rec.name, f.name, rec.size);
+    }
+    let (ty, offset) = (f.ty, f.offset);
+    let bytes = encode(ty, text)?;
+    let at = vm.world.row_at(target.col, target.row) + offset;
+    vm.write(at, &bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,5 +114,75 @@ mod tests {
         assert!(encode(Ty::U32, "-1").is_err());
         assert!(encode(Ty::I32, "1.5").is_err());
         assert!(encode(Ty::Vec(3), "[nan, 1, 2]").is_err());
+    }
+
+    fn game1() -> Vm {
+        let wit = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../se-contract/tests/game1.wit");
+        let g = se_contract::generate(&wit).unwrap();
+        let mut vm = Vm::new(&g.module, 8).unwrap();
+        vm.set_len(0, 2).unwrap();
+        vm
+    }
+
+    fn pos(vm: &Vm, row: u32) -> Target {
+        let col = vm.meta.components.iter().position(|r| r.name == "transform").unwrap() as u32;
+        let field = vm.meta.components[col as usize]
+            .fields
+            .iter()
+            .position(|f| f.name == "pos")
+            .unwrap();
+        Target { col, row, field }
+    }
+
+    #[test]
+    fn commit_changes_only_the_field() {
+        let mut vm = game1();
+        let t = pos(&vm, 1);
+        let before = vm.snapshot();
+        commit(&mut vm, &t, "[1, 2, 3]").unwrap();
+        let at = vm.world.row_at(t.col, 1);
+        let got = vm.read(at, 12).unwrap();
+        let want: Vec<u8> = [1f32, 2.0, 3.0].iter().flat_map(|f| f.to_le_bytes()).collect();
+        assert_eq!(got, want);
+        let after = vm.snapshot();
+        let base = vm.meta.base;
+        let lo = (at - base) as usize;
+        for (i, (a, b)) in before.iter().zip(&after).enumerate() {
+            if !(lo..lo + 12).contains(&i) {
+                assert_eq!(a, b, "byte {i} moved");
+            }
+        }
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn bad_text_leaves_memory_alone() {
+        let mut vm = game1();
+        let t = pos(&vm, 1);
+        let before = vm.snapshot();
+        assert!(commit(&mut vm, &t, "oops").is_err());
+        assert_eq!(vm.snapshot(), before);
+    }
+
+    #[test]
+    fn row_zero_does_not_touch_row_one() {
+        let mut vm = game1();
+        let t1 = pos(&vm, 1);
+        let at1 = vm.world.row_at(t1.col, 1);
+        let before = vm.read(at1, 12).unwrap();
+        let t0 = pos(&vm, 0);
+        commit(&mut vm, &t0, "4 5 6").unwrap();
+        assert_eq!(vm.read(at1, 12).unwrap(), before);
+    }
+
+    #[test]
+    fn a_bad_field_index_is_an_error() {
+        let mut vm = game1();
+        let mut t = pos(&vm, 0);
+        t.field = 99;
+        let before = vm.snapshot();
+        assert!(commit(&mut vm, &t, "1").is_err());
+        assert_eq!(vm.snapshot(), before);
     }
 }

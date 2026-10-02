@@ -14,8 +14,14 @@ use se_contract::layout::Ty;
 use se_tui::Node;
 use se_vm::Vm;
 
-/// Which `(column, field)` an Inspector row edits, or `None` for a heading.
-pub type RowMap = Vec<Option<(u32, usize)>>;
+/// The one field an Inspector row edits: which column, which row of it, and
+/// which field of the record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    pub col: u32,
+    pub row: u32,
+    pub field: usize,
+}
 
 /// Pools, then their rows. A pool with no rows still shows, because "the
 /// roster is empty" is a thing you need to be able to see.
@@ -86,9 +92,9 @@ fn scalar(ty: Ty, b: &[u8]) -> String {
 }
 
 /// One row of the world, read across every column of its pool.
-pub fn inspect(vm: &Vm, selected: usize) -> (Vec<(String, String)>, RowMap) {
+pub fn inspect(vm: &Vm, selected: usize) -> (Vec<(String, String)>, Vec<Option<Target>>) {
     let mut rows = Vec::new();
-    let mut map: RowMap = Vec::new();
+    let mut map: Vec<Option<Target>> = Vec::new();
 
     let Some((pi, row)) = locate(vm, selected) else {
         // Not on a row: show the control var set instead, which is the other
@@ -125,7 +131,7 @@ pub fn inspect(vm: &Vm, selected: usize) -> (Vec<(String, String)>, RowMap) {
                 .map(|b| scalar(f.ty, b))
                 .unwrap_or_else(|| "?".into());
             rows.push((format!("  {}", f.name), val));
-            map.push(Some((*col, fi)));
+            map.push(Some(Target { col: *col, row, field: fi }));
         }
     }
     (rows, map)

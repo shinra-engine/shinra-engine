@@ -11,7 +11,7 @@
 
 use crate::build;
 use crate::deck::Deck;
-use crate::inspect::{hierarchy, inspect, project_tree, RowMap};
+use crate::inspect::{hierarchy, inspect, project_tree, Target};
 use anyhow::{bail, Context, Result};
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RTerminal;
@@ -190,7 +190,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let mut last = t0;
     let mut index = 0u64;
     let mut areas = Areas::default();
-    let mut row_map: RowMap = Vec::new();
+    let mut row_map: Vec<Option<Target>> = Vec::new();
 
     loop {
         let started = Instant::now();
