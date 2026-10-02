@@ -177,6 +177,41 @@ mod tests {
     }
 
     #[test]
+    fn edit_round_trip_changes_only_the_field() {
+        use crate::inspect::inspect;
+        let mut vm = game1();
+        let sel = 2; // hierarchy: heading, bodies[0], bodies[1]
+        let t = pos(&vm, 1);
+        let at = vm.world.row_at(t.col, 1)
+            + vm.meta.components[t.col as usize].fields[t.field].offset;
+        // Seed the field with a byte no encoded float contains, so every byte
+        // of the edit shows up in the diff.
+        vm.write(at, &[0xAA; 12]).unwrap();
+
+        let (_, map) = inspect(&vm, sel);
+        let i = map.iter().position(|m| *m == Some(t)).expect("pos row has a Target");
+        let target = map[i].unwrap();
+
+        let before = vm.snapshot();
+        commit(&mut vm, &target, "[1, 2, 3]").unwrap();
+        let after = vm.snapshot();
+
+        let changed: Vec<usize> = before
+            .iter()
+            .zip(&after)
+            .enumerate()
+            .filter(|(_, (a, b))| a != b)
+            .map(|(i, _)| i)
+            .collect();
+        let lo = (at - vm.meta.base) as usize;
+        assert_eq!(changed, (lo..lo + 12).collect::<Vec<_>>());
+
+        let (rows, _) = inspect(&vm, sel);
+        let shown = rows.iter().find(|(k, _)| k == "  pos").expect("a pos row");
+        assert_eq!(shown.1, "[1.000, 2.000, 3.000]");
+    }
+
+    #[test]
     fn a_bad_field_index_is_an_error() {
         let mut vm = game1();
         let mut t = pos(&vm, 0);
