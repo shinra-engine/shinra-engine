@@ -16,6 +16,7 @@
 mod build;
 mod deck;
 mod discover;
+mod edit;
 mod inspect;
 mod run;
 mod shot;
