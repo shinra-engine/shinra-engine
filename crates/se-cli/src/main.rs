@@ -19,8 +19,10 @@ mod discover;
 mod edit;
 mod inspect;
 mod intents;
+mod live;
 mod run;
 mod shot;
+mod swap;
 
 use anyhow::{bail, Result};
 use discover::GameSrc;
