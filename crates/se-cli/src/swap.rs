@@ -54,6 +54,23 @@ pub fn swap(live: &mut Live, src: &GameSrc, out: &Path, cat: &str, name: &str, s
     Ok(format!("{cat}: {name}"))
 }
 
+/// Enter on the Project panel: swap in the module under the cursor and say how
+/// it went in the log. A heading or any other row carries no id and does nothing.
+pub fn swap_selected(
+    ide: &mut se_tui::Ide,
+    live: &mut Live,
+    src: &GameSrc,
+    ids: &[Option<(String, String)>],
+    size: (u32, u32),
+) {
+    let Some(Some((cat, name))) = ids.get(ide.project_sel) else { return };
+    let out = Path::new("target").join("shinra").join(&src.name);
+    match swap(live, src, &out, cat, name, size) {
+        Ok(_) => ide.note(format!("swapped {cat} -> {name}")),
+        Err(e) => ide.note(format!("swap failed: {e:#}")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

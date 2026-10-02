@@ -10,7 +10,7 @@
 //! `m` means — and the host keeps only the keys that leave or switch a run.
 
 use crate::deck::Deck;
-use crate::live::{open, pick};
+use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
@@ -18,7 +18,7 @@ use ratatui::Terminal as RTerminal;
 use se_gpu::command;
 use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
 use se_vm::input::Keys;
-use std::path::Path;
+use se_vm::memory::Slot;
 use std::time::{Duration, Instant};
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
@@ -104,6 +104,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let mut index = 0u64;
     let mut areas = Areas::default();
     let mut row_map: Vec<Option<Target>> = Vec::new();
+    let mut project_ids: Vec<Option<(String, String)>> = Vec::new();
 
     loop {
         let started = Instant::now();
@@ -120,6 +121,9 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
         let it = term.intent;
         crate::intents::apply(it, &mut ide, &mut live.vm, &row_map, &areas);
+        if it.swap {
+            crate::swap::swap_selected(&mut ide, &mut live, deck.src(), &project_ids, screen);
+        }
         // `n` — the swipe. A different game is a different contract, so
         // nothing is carried over: the old one is dropped whole.
         if (it.next_game || it.prev_game) && deck.step(if it.next_game { 1 } else { -1 }) {
@@ -201,15 +205,14 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         ide.inspector_editable = map.iter().map(|m| m.is_some()).collect();
         row_map = map;
         ide.clamp_inspector();
-        let active: Vec<(String, String)> = [("game", opt.game.as_deref()), ("render", opt.render.as_deref())]
+        let active: Vec<(String, String)> = [("game", Slot::Game), ("render", Slot::Render)]
             .into_iter()
-            .filter_map(|(c, w)| {
-                pick(deck.src(), Path::new(""), c, w).map(|(n, _)| (c.to_string(), n))
-            })
+            .filter_map(|(c, s)| live.vm.module(s).map(|m| (c.to_string(), m.name.clone())))
             .collect();
         let (lines, ids) = project_tree(deck.src(), &active);
         ide.project = lines;
         ide.project_pick = ids.iter().map(|m| m.is_some()).collect();
+        project_ids = ids;
         ide.clamp_project();
 
         let picture = px.unwrap_or_default();
