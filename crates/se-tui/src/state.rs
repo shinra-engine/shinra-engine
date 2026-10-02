@@ -98,6 +98,9 @@ pub struct Ide {
     pub editing: Option<String>,
     /// The bundle's module tree, as the layout rule lays it out.
     pub project: Vec<String>,
+    /// Which project lines are modules that can be swapped in. Filled by the host.
+    pub project_pick: Vec<bool>,
+    pub project_sel: usize,
     pub log: Vec<String>,
 
     pub focused: Panel,
@@ -124,6 +127,8 @@ impl Default for Ide {
             inspector_sel: 0,
             editing: None,
             project: Vec::new(),
+            project_pick: Vec::new(),
+            project_sel: 0,
             log: Vec::new(),
             focused: Panel::default(),
             mode: Mode::default(),
@@ -244,6 +249,32 @@ impl Ide {
         }
     }
 
+    /// Step to the next swappable project line, wrapping past the ends.
+    pub fn move_project(&mut self, delta: i32) {
+        let n = self.project_pick.len();
+        if n == 0 {
+            return;
+        }
+        let mut i = self.project_sel.min(n - 1);
+        for _ in 0..n {
+            i = ((i as i32 + delta).rem_euclid(n as i32)) as usize;
+            if self.project_pick[i] {
+                self.project_sel = i;
+                return;
+            }
+        }
+    }
+
+    /// Keep the project cursor on a swappable line, or 0 when there is none.
+    pub fn clamp_project(&mut self) {
+        let n = self.project_pick.len();
+        if n == 0 {
+            self.project_sel = 0;
+        } else if self.project_sel >= n || !self.project_pick[self.project_sel] {
+            self.project_sel = self.project_pick.iter().position(|&e| e).unwrap_or(0);
+        }
+    }
+
     pub fn move_selection(&mut self, delta: i32) {
         if self.hierarchy.is_empty() {
             return;
@@ -270,6 +301,30 @@ mod tests {
             inspector_editable: vec![false, true],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn project_moves_over_pickable_and_wraps() {
+        let mut i = Ide { project_pick: vec![false, true, false, true], project_sel: 1, ..Default::default() };
+        i.move_project(1);
+        assert_eq!(i.project_sel, 3);
+        i.move_project(1);
+        assert_eq!(i.project_sel, 1);
+        i.move_project(-1);
+        assert_eq!(i.project_sel, 3);
+    }
+
+    #[test]
+    fn project_clamp() {
+        let mut i = Ide { project_pick: vec![false, false], project_sel: 1, ..Default::default() };
+        i.clamp_project();
+        assert_eq!(i.project_sel, 0);
+        i.project_pick = vec![false, false, true];
+        i.clamp_project();
+        assert_eq!(i.project_sel, 2);
+        i.project_pick.clear();
+        i.clamp_project();
+        assert_eq!(i.project_sel, 0);
     }
 
     #[test]

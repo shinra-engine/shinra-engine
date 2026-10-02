@@ -49,6 +49,10 @@ pub struct Intent {
     /// Up/Down while the Inspector has focus — its own selection, not the
     /// Hierarchy's.
     pub inspect_select: i32,
+    /// Up/Down while the Project panel has focus.
+    pub project_select: i32,
+    /// Enter while the Project panel has focus: swap in the selected module.
+    pub swap: bool,
     pub edit: Option<Edit>,
     pub type_char: Option<char>,
     pub type_back: bool,
@@ -123,6 +127,8 @@ pub struct Terminal {
     /// Whether the Inspector has focus, so Up/Down and Enter can mean its
     /// selection rather than the Hierarchy's.
     pub on_inspector: bool,
+    /// Whether the Project panel has focus.
+    pub on_project: bool,
 }
 
 impl Terminal {
@@ -150,6 +156,7 @@ impl Terminal {
             intent: Intent::default(),
             typing: false,
             on_inspector: false,
+            on_project: false,
             play: false,
         })
     }
@@ -298,6 +305,18 @@ impl Terminal {
             }
             KeyCode::Enter if self.on_inspector => {
                 self.intent.edit = Some(Edit::Begin);
+                return;
+            }
+            KeyCode::Up if self.on_project => {
+                self.intent.project_select = -1;
+                return;
+            }
+            KeyCode::Down if self.on_project => {
+                self.intent.project_select = 1;
+                return;
+            }
+            KeyCode::Enter if self.on_project => {
+                self.intent.swap = true;
                 return;
             }
             KeyCode::Up => self.intent.select = -1,

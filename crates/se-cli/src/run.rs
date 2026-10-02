@@ -199,6 +199,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         term.play = ide.mode.is_play();
         term.typing = ide.editing.is_some();
         term.on_inspector = ide.focused == se_tui::Panel::Inspector;
+        term.on_project = ide.focused == se_tui::Panel::Project;
         term.poll()?;
         if term.quit {
             break;
@@ -293,7 +294,10 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
                 pick(deck.src(), Path::new(""), c, w).map(|(n, _)| (c.to_string(), n))
             })
             .collect();
-        ide.project = project_tree(deck.src(), &active).0;
+        let (lines, ids) = project_tree(deck.src(), &active);
+        ide.project = lines;
+        ide.project_pick = ids.iter().map(|m| m.is_some()).collect();
+        ide.clamp_project();
 
         let picture = px.unwrap_or_default();
         let shown = Pixels { width: screen.0, height: screen.1, rgba: &picture };

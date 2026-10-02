@@ -219,7 +219,14 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
     let tree: Vec<ListItem> = ide
         .project
         .iter()
-        .map(|l| ListItem::new(Span::styled(l.clone(), Style::default().fg(OK))))
+        .enumerate()
+        .map(|(i, l)| {
+            if ide.focused == Panel::Project && ide.project_pick.get(i) == Some(&true) && i == ide.project_sel {
+                ListItem::new(Span::styled(format!("▸{l}"), Style::default().fg(ACCENT)))
+            } else {
+                ListItem::new(Span::styled(l.clone(), Style::default().fg(OK)))
+            }
+        })
         .collect();
     f.render_widget(list(tree, panel("Project", ide.focused == Panel::Project)), bot[0]);
 
