@@ -205,42 +205,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         }
 
         let it = term.intent;
-        if it.cycle_panel {
-            ide.focused = ide.focused.next();
-        }
-        if let Some(p) = it.focus {
-            ide.focused = p;
-        }
-        if let Some((c, r)) = it.click {
-            if let Some(p) = areas.panel_at(c, r) {
-                ide.focused = p;
-            }
-        }
-        if it.select != 0 {
-            ide.move_selection(it.select);
-        }
-        if let Some(o) = it.expand {
-            ide.set_expanded(o);
-        }
-        if it.inspect_select != 0 {
-            ide.move_inspector(it.inspect_select);
-        }
-        if it.cycle_art {
-            let name = ide.cycle_art();
-            ide.note(format!("viewport: {name}"));
-        }
-        if it.toggle_run {
-            ide.mode = if ide.mode.is_play() { Mode::Edit } else { Mode::Play };
-            if ide.mode.is_play() {
-                ide.focused = se_tui::Panel::Viewport;
-            }
-            ide.note(if ide.mode.is_play() { "run" } else { "stopped" });
-        }
-        if it.leave_run {
-            ide.mode = Mode::Edit;
-            ide.note("stopped");
-        }
-
+        crate::intents::apply(it, &mut ide, &mut live.vm, &row_map, &areas);
         // `n` — the swipe. A different game is a different contract, so
         // nothing is carried over: the old one is dropped whole.
         if (it.next_game || it.prev_game) && deck.step(if it.next_game { 1 } else { -1 }) {
@@ -323,7 +288,6 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         row_map = map;
         ide.clamp_inspector();
         ide.project = project_tree(deck.src());
-        let _ = &row_map;
 
         let picture = px.unwrap_or_default();
         let shown = Pixels { width: screen.0, height: screen.1, rgba: &picture };

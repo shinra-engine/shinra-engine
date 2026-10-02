@@ -18,6 +18,7 @@ mod deck;
 mod discover;
 mod edit;
 mod inspect;
+mod intents;
 mod run;
 mod shot;
 

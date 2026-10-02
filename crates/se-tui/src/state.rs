@@ -259,3 +259,50 @@ impl Ide {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ide() -> Ide {
+        Ide {
+            inspector: vec![("Transform".into(), String::new()), ("x".into(), "1.5".into())],
+            inspector_editable: vec![false, true],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn begin_on_header_is_refused() {
+        let mut i = ide();
+        i.inspector_sel = 0;
+        assert!(!i.begin_edit());
+        assert!(i.editing.is_none());
+    }
+
+    #[test]
+    fn begin_seeds_current_text_and_take_returns_it() {
+        let mut i = ide();
+        i.inspector_sel = 1;
+        assert!(i.begin_edit());
+        assert_eq!(i.editing.as_deref(), Some("1.5"));
+        for c in ['2', '3', '4'] {
+            i.edit_push(c);
+        }
+        i.edit_backspace();
+        assert_eq!(i.editing.as_deref(), Some("1.523"));
+        assert_eq!(i.take_edit(), Some((1, "1.523".to_string())));
+        assert!(i.editing.is_none());
+    }
+
+    #[test]
+    fn buffer_caps_at_64() {
+        let mut i = ide();
+        i.inspector_sel = 1;
+        i.begin_edit();
+        for _ in 0..65 {
+            i.edit_push('9');
+        }
+        assert_eq!(i.editing.as_ref().map(|b| b.len()), Some(64));
+    }
+}
