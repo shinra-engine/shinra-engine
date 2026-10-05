@@ -21,6 +21,11 @@ if ! has_target; then
     }
 fi
 
+# Where the example games are. The engine tests that load a real game read it from
+# SHINRA_EXAMPLES, so it is set before they run, not after.
+EXAMPLES=${EXAMPLES:-../shinra-examples}
+export SHINRA_EXAMPLES="$EXAMPLES"
+
 cargo build -p se-cli
 # Explicit list, not --workspace: legacy crates (se-host, se-render, most of
 # se-abi) must not be able to fail CI.
@@ -29,7 +34,6 @@ cargo test -p se-contract -p se-macro -p se -p se-vm -p se-gpu -p se-cli -p se-t
 echo "ci: engine ok"
 
 # --- examples -------------------------------------------------------------
-EXAMPLES=${EXAMPLES:-../shinra-examples}
 W=160 H=90
 HEADER=$(printf 'P6\n%d %d\n255\n' "$W" "$H")
 HLEN=${#HEADER}

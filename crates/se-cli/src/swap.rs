@@ -77,7 +77,8 @@ mod tests {
     use crate::{deck::Deck, run::Options};
 
     fn deck() -> Deck {
-        let root = std::env::var("SHINRA_EXAMPLES").unwrap_or_else(|_| "../shinra-examples".into());
+        let root = std::env::var("SHINRA_EXAMPLES")
+            .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../../shinra-examples").into());
         Deck::open(&Path::new(&root).join("game1")).expect("game1")
     }
 
