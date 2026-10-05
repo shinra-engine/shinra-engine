@@ -95,13 +95,15 @@ fn a_draw_of_the_wrong_column_is_refused() -> Result<()> {
 }
 
 #[test]
-fn a_column_past_the_memory_is_refused() -> Result<()> {
+fn an_absurd_draw_count_is_refused() -> Result<()> {
     let r = rig()?;
+    // An absurd count is refused by the capacity check, which runs before the
+    // pool and memory checks; those stay as the defence behind it.
     let draw = Command { column: r.column, count: u32::MAX, ..cmd(DRAW_INSTANCED) };
     refused(
         &r,
         &[cmd(BEGIN_PASS), draw, cmd(END_PASS)],
-        "column a draw names runs past the memory",
+        "instance buffer holds",
     );
     Ok(())
 }
