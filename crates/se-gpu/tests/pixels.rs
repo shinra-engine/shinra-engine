@@ -15,16 +15,11 @@ use se_vm::Vm;
 use std::path::{Path, PathBuf};
 use std::process::Command as Proc;
 
+#[path = "../../se-vm/tests/common/wasm_target.rs"]
+mod wasm_target;
+
 const W: u32 = 192;
 const H: u32 = 192;
-
-fn has_wasm_target() -> bool {
-    Proc::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
 
 fn build(dir: &Path, name: &str, slot: Slot, src: &str) -> Result<Vec<u8>> {
     let file = dir.join(format!("{name}.rs"));
@@ -158,10 +153,7 @@ fn stage_section() -> Vec<u8> {
 
 #[test]
 fn contract_wit_to_pixels() -> Result<()> {
-    if !has_wasm_target() {
-        eprintln!("skipping: rustup target add wasm32-unknown-unknown");
-        return Ok(());
-    }
+    wasm_target::require_wasm_target();
     let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
     let g = se_contract::generate(&wit)?;
     // One directory per build: rustc names its intermediate objects after the
