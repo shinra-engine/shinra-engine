@@ -12,7 +12,7 @@
 use crate::deck::Deck;
 use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
-use crate::reload::{Plan, Reloader, Selection};
+use crate::reload::{Outcome, Reloader, Selection};
 use crate::savefile;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
@@ -22,7 +22,7 @@ use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
 use se_vm::input::Keys;
 use se_vm::memory::Slot;
 use std::path::Path;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
 /// only makes the terminal the bottleneck.
@@ -111,9 +111,9 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let t0 = Instant::now();
     let mut last = t0;
     let mut polled = t0;
-    // The newest source when a reload last failed: the same broken tree is
-    // not recompiled every poll, only after another edit.
-    let mut failed: Option<SystemTime> = None;
+    // Lives across polls so a broken unit is compiled once, not every poll.
+    // A different game is a different tree: it gets a new one.
+    let mut reloader: Option<Reloader> = None;
     let mut index = 0u64;
     let mut areas = Areas::default();
     let mut row_map: Vec<Option<Target>> = Vec::new();
@@ -159,7 +159,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             ide.current = deck.current;
             ide.note(format!("→ {}", ide.games[deck.current]));
             reopen(&deck, &opt, screen, &mut ide, &mut live);
-            failed = None;
+            reloader = None;
         }
 
         // Match the framebuffer to the panel that was actually drawn, and to
@@ -188,10 +188,10 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
         if opt.watch && polled.elapsed() >= WATCH {
             polled = Instant::now();
-            if watch(&deck, &opt, screen, &mut ide, &mut live, &mut failed)
+            if watch(&deck, &opt, screen, &mut ide, &mut live, &mut reloader)
                 && !reopen(&deck, &opt, screen, &mut ide, &mut live)
             {
-                failed = newest(&deck.src().root);
+                reloader.as_mut().map(Reloader::restart_failed);
             }
         }
 
@@ -291,24 +291,6 @@ fn reopen(deck: &Deck, opt: &Options, screen: (u32, u32), ide: &mut Ide, live: &
     }
 }
 
-/// Newest mtime of any file under `dir`.
-fn newest(dir: &Path) -> Option<SystemTime> {
-    let mut stack = vec![dir.to_path_buf()];
-    let mut best = None;
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
-                best = best.max(Some(t));
-            }
-        }
-    }
-    best
-}
-
 /// One poll: plan, then swap what is stale. Returns true when the contract
 /// moved and the game has to be opened again. The selection is whatever is
 /// loaded now, so a swap from the Project panel is watched too.
@@ -318,38 +300,33 @@ fn watch(
     screen: (u32, u32),
     ide: &mut Ide,
     live: &mut crate::live::Live,
-    failed: &mut Option<SystemTime>,
+    reloader: &mut Option<Reloader>,
 ) -> bool {
     let src = deck.src();
-    if failed.is_some() && newest(&src.root) == *failed {
-        return false;
-    }
     let name = |s: Slot| live.vm.module(s).map(|m| m.name.clone());
     let sel = Selection { game: name(Slot::Game), render: name(Slot::Render) };
-    let out = Path::new("target").join("shinra").join(&src.name);
-    let reloader = Reloader::new(src.root.clone(), out, sel, opt.profile.clone());
+    let rl = reloader.get_or_insert_with(|| {
+        let out = Path::new("target").join("shinra").join(&src.name);
+        Reloader::new(src.root.clone(), out, Selection { game: None, render: None }, opt.profile.clone())
+    });
+    rl.select(sel);
     let started = Instant::now();
-    let done = match reloader.plan() {
-        Ok(Plan::Nothing) => Ok(Vec::new()),
-        Ok(Plan::Restart) => {
+    match rl.poll(live, screen) {
+        Ok(Outcome::Nothing) => {}
+        Ok(Outcome::Restart) => {
             ide.note("contract changed: reopening".to_string());
-            *failed = None;
             return true;
         }
-        Ok(Plan::Modules(units)) => reloader.apply(live, screen, &units),
-        Err(e) => Err(e),
-    };
-    match done {
-        Ok(names) if names.is_empty() => {}
-        Ok(names) => {
-            *failed = None;
-            let ms = started.elapsed().as_millis();
-            ide.note(format!("reloaded {} in {ms} ms", names.join(", ")));
+        Ok(Outcome::Changed { ok, failed }) => {
+            if !ok.is_empty() {
+                let ms = started.elapsed().as_millis();
+                ide.note(format!("reloaded {} in {ms} ms", ok.join(", ")));
+            }
+            for f in failed {
+                ide.note(format!("reload failed: {}: {}", f.unit, f.message));
+            }
         }
-        Err(e) => {
-            *failed = newest(&src.root);
-            ide.note(format!("reload failed: {e:#}"));
-        }
+        Err(e) => ide.note(format!("reload failed: {e:#}")),
     }
     false
 }

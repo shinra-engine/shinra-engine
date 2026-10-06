@@ -1,7 +1,7 @@
 //! An edit to one of game2's stages: the whole process module is rebuilt and
 //! every stage replaced, under a running world.
 
-use super::apply_game::{copy_game2, edit, sprites};
+use super::apply_game::{changed, copy_game2, edit, sprites};
 use super::{Plan, Reloader, Selection};
 use crate::deck::Deck;
 use crate::live;
@@ -17,16 +17,16 @@ fn apply_process_replaces_every_stage_and_keeps_the_world() {
     let size = (64, 36);
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();
     let out = Path::new("target").join("shinra").join(&deck.src().name);
-    let rl = Reloader::new(root.clone(), out, Selection { game: None, render: None }, "debug".into());
+    let mut rl = Reloader::new(root.clone(), out, Selection { game: None, render: None }, "debug".into());
     live.vm.frame(1).unwrap();
     let names = |l: &live::Live| l.vm.stages().iter().map(|s| s.name.clone()).collect::<Vec<_>>();
     let before = names(&live);
     assert!(!before.is_empty());
 
     edit(&root.join("process/gravity.rs"), "const G: f32 = -26.0;", "const G: f32 = -13.0;");
-    let Plan::Modules(units) = rl.plan().unwrap() else { panic!("an edited stage is Modules") };
+    assert!(matches!(rl.plan().unwrap(), Plan::Modules(_)), "an edited stage is Modules");
     let world = sprites(&live);
-    assert_eq!(rl.apply(&mut live, size, &units).unwrap(), ["process"]);
+    assert_eq!(rl.poll(&mut live, size).unwrap(), changed(&["process"]));
     assert_eq!(names(&live), before);
     assert_eq!(sprites(&live), world, "a reload moved no row");
     assert_eq!(rl.plan().unwrap(), Plan::Nothing);

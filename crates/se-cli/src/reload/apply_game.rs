@@ -1,6 +1,6 @@
 //! An edit to game2's tick, compiled and swapped under a running world.
 
-use super::{Plan, Reloader, Selection};
+use super::{Outcome, Plan, Reloader, Selection};
 use crate::deck::Deck;
 use crate::live::{self, Live};
 use crate::run::Options;
@@ -44,6 +44,11 @@ pub(super) fn sprites(l: &Live) -> (u32, Vec<u8>) {
     (l.vm.world.pool_len[pool], row0)
 }
 
+/// What a poll that reloaded `units` and refused none returns.
+pub(super) fn changed(units: &[&str]) -> Outcome {
+    Outcome::Changed { ok: units.iter().map(|u| u.to_string()).collect(), failed: Vec::new() }
+}
+
 pub(super) fn edit(file: &Path, from: &str, to: &str) {
     let s = fs::read_to_string(file).unwrap();
     assert!(s.contains(from), "{from} not in {}", file.display());
@@ -58,7 +63,7 @@ fn apply_game_swaps_the_tick_and_keeps_the_world() {
     let size = (64, 36);
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();
     let out = Path::new("target").join("shinra").join(&deck.src().name);
-    let rl = Reloader::new(root.clone(), out, Selection { game: None, render: None }, "debug".into());
+    let mut rl = Reloader::new(root.clone(), out, Selection { game: None, render: None }, "debug".into());
 
     live.vm.frame(0).unwrap();
     live.vm.frame(1).unwrap();
@@ -67,10 +72,10 @@ fn apply_game_swaps_the_tick_and_keeps_the_world() {
 
     let game = root.join("game/game2.rs");
     edit(&game, "view.half_w = 6.4;", "view.half_w = 7.5;");
-    let Plan::Modules(units) = rl.plan().unwrap() else { panic!("an edited game is Modules") };
+    assert!(matches!(rl.plan().unwrap(), Plan::Modules(_)), "an edited game is Modules");
     let world = sprites(&live);
     let t = std::time::Instant::now();
-    assert_eq!(rl.apply(&mut live, size, &units).unwrap(), ["game/game2"]);
+    assert_eq!(rl.poll(&mut live, size).unwrap(), changed(&["game/game2"]));
     eprintln!("apply took {:?}", t.elapsed());
     assert_eq!(sprites(&live), world, "a swap moved no row");
     live.vm.frame(2).unwrap();
@@ -79,9 +84,10 @@ fn apply_game_swaps_the_tick_and_keeps_the_world() {
 
     // A syntax error: the compile fails and the module that was running stays.
     edit(&game, "view.half_w = 7.5;", "view.half_w = = 7.5;");
-    let Plan::Modules(units) = rl.plan().unwrap() else { panic!("still Modules") };
-    let err = rl.apply(&mut live, size, &units).unwrap_err();
-    eprintln!("refused: {}", format!("{err:#}").lines().next().unwrap_or(""));
+    assert!(matches!(rl.plan().unwrap(), Plan::Modules(_)), "still Modules");
+    let Outcome::Changed { ok, failed } = rl.poll(&mut live, size).unwrap() else { panic!("not Changed") };
+    assert!(ok.is_empty() && failed.len() == 1, "{failed:?}");
+    eprintln!("refused: {}", failed[0].message.lines().next().unwrap_or(""));
     live.vm.frame(3).unwrap();
     assert_eq!(half_w(&live), 7.5);
 
