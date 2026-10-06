@@ -93,9 +93,7 @@ fn rolled_back(vm: &mut Vm) -> Result<()> {
 
 #[test]
 fn j_a_trapping_process_is_rolled_back_to_the_previous_one() -> Result<()> {
-    if !common::has_wasm_target() {
-        return Ok(());
-    }
+    common::require_wasm_target();
     let (mut vm, dir) = running("swap-trapprocess")?;
     vm.load(Slot::Process, "v2", process(&dir, "v2", &["s"], 1, TRAPS, "")?)?;
 
@@ -110,9 +108,7 @@ fn j_a_trapping_process_is_rolled_back_to_the_previous_one() -> Result<()> {
 /// v1 writes its own `LUT` back.
 #[test]
 fn k_statics_are_restored_by_the_rollback() -> Result<()> {
-    if !common::has_wasm_target() {
-        return Ok(());
-    }
+    common::require_wasm_target();
     let (mut vm, dir) = running("swap-trapstatics")?;
     let v2 = process(&dir, "v2", &["s"], 0xFFFF_FFFF, TRAPS_AFTER_READ, "")?;
     vm.load(Slot::Process, "v2", v2)?;
@@ -124,9 +120,7 @@ fn k_statics_are_restored_by_the_rollback() -> Result<()> {
 
 #[test]
 fn l_the_stage_list_is_restored_by_the_rollback() -> Result<()> {
-    if !common::has_wasm_target() {
-        return Ok(());
-    }
+    common::require_wasm_target();
     let (mut vm, dir) = running("swap-trapstages")?;
     vm.load(Slot::Process, "v2", process(&dir, "v2", &["s", "t"], 1, WRITES, TRAPS)?)?;
     assert_eq!(names(&vm), ["s", "t"]);
@@ -139,9 +133,7 @@ fn l_the_stage_list_is_restored_by_the_rollback() -> Result<()> {
 
 #[test]
 fn m_a_process_swap_that_runs_keeps_its_stages() -> Result<()> {
-    if !common::has_wasm_target() {
-        return Ok(());
-    }
+    common::require_wasm_target();
     let (mut vm, dir) = running("swap-goodstages")?;
     vm.load(Slot::Process, "v2", process(&dir, "v2", &["s", "t"], 2, WRITES, "")?)?;
     vm.frame(2)?;

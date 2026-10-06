@@ -26,13 +26,6 @@ pub fn meta() -> Meta {
     Meta::read(&Table::new(bytes).expect("table")).expect("meta")
 }
 
-pub fn has_wasm_target() -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
 
 /// Exactly the flags a module must be built with. They are here, in the test,
 /// because getting any one of them wrong is a silent failure at run time:

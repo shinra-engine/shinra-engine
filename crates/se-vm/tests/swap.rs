@@ -3,6 +3,7 @@
 //! replaced keeps running.
 
 mod common;
+use common::require_wasm_target;
 
 use anyhow::{bail, Result};
 use se_vm::memory::{Slot, STACK_SIZE};
