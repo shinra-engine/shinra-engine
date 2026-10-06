@@ -19,7 +19,7 @@
 //! `game/*.rs` lands on the same addresses as the one it replaces. That is
 //! what makes a hot swap a swap rather than a relocation.
 
-use crate::discover::{Category, GameSrc, ModuleSrc};
+use crate::discover::{Category, GameSrc};
 use anyhow::{bail, Context, Result};
 use se_vm::memory::{Slot, STACK_SIZE};
 use std::path::{Path, PathBuf};
@@ -236,63 +236,4 @@ pub fn build(src: &GameSrc, out: &Path, profile: &str) -> Result<Built> {
         }
     }
     Ok(Built { out: out.to_path_buf(), contract: contract_wasm, modules })
-}
-
-/// Rebuild only what changed. Used by the watch loop.
-#[allow(dead_code)]
-#[allow(dead_code)]
-/// Rebuild only what changed. A changed contract is not a reload: every module
-/// was compiled against it, so the whole set goes.
-pub fn build_changed(src: &GameSrc, out: &Path, profile: &str) -> Result<Vec<String>> {
-    let contract_wasm = out.join("contract.wasm");
-    if newer(&src.contract, &contract_wasm)? {
-        build(src, out, profile)?;
-        return Ok(vec!["contract".into()]);
-    }
-    let engine = Engine::find(profile)?;
-    let gen = out.join(".gen");
-    let contract_rs = out.join("contract.rs");
-    let mut done = Vec::new();
-    for cat in &src.categories {
-        for m in &cat.modules {
-            let wasm = out.join(&cat.name).join(format!("{}.wasm", m.name));
-            if newer(&m.file, &wasm)? || dir_newer(cat, &wasm)? {
-                compile(&m.name, &[m.name.as_str()], cat, out, &gen, &contract_rs, &engine, profile)?;
-                done.push(format!("{}/{}", cat.name, m.name));
-            }
-        }
-    }
-    Ok(done)
-}
-
-#[allow(dead_code)]
-fn newer(src: &Path, out: &Path) -> Result<bool> {
-    let Ok(o) = std::fs::metadata(out).and_then(|m| m.modified()) else {
-        return Ok(true);
-    };
-    Ok(std::fs::metadata(src)?.modified()? > o)
-}
-
-/// Anything deeper than depth 1 is a source file inside a module — including
-/// `.wgsl`, which `include_str!` pulls in without rustc being re-run on our
-/// behalf. So a module is stale if any non-module file in its category moved.
-#[allow(dead_code)]
-fn dir_newer(cat: &Category, out: &Path) -> Result<bool> {
-    let Ok(o) = std::fs::metadata(out).and_then(|m| m.modified()) else {
-        return Ok(true);
-    };
-    let mut stack = vec![cat.dir.clone()];
-    while let Some(d) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&d) else { continue };
-        for e in rd.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                stack.push(p);
-            } else if std::fs::metadata(&p).and_then(|m| m.modified()).map(|t| t > o).unwrap_or(false)
-            {
-                return Ok(true);
-            }
-        }
-    }
-    Ok(false)
 }

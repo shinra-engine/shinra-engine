@@ -20,6 +20,8 @@ mod edit;
 mod inspect;
 mod intents;
 mod live;
+#[allow(dead_code)]
+mod reload;
 mod run;
 mod savefile;
 mod shot;
