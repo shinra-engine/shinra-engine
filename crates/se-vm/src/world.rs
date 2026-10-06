@@ -182,8 +182,24 @@ impl World {
         }
 
         // Size the placement before writing anything, so a world that will not
-        // fit is refused rather than half-built.
-        let total: u32 = comps.iter().map(|r| r.size * cap).sum();
+        // fit is refused rather than half-built. In u64: `size * cap` is
+        // caller-chosen and must not wrap past the check below.
+        let mut bytes = Vec::with_capacity(comps.len());
+        let mut sum = 0u64;
+        for r in comps {
+            let b = r.size as u64 * cap as u64;
+            sum += b;
+            if sum > u32::MAX as u64 {
+                bail!(
+                    "a capacity of {cap} rows does not fit: column `{}` ({} bytes a row) \
+                     takes the world past 4 GiB",
+                    r.name,
+                    r.size
+                )
+            }
+            bytes.push(b as u32);
+        }
+        let total = sum as u32;
         memory::check_heap(m.heap, total)?;
 
         let mut base = Vec::with_capacity(comps.len());
@@ -197,7 +213,7 @@ impl World {
             w32(mem, store, d + 4, cap)?;
             w32(mem, store, d + 8, r.size)?;
             w32(mem, store, d + 12, pool_of[i])?;
-            at += r.size * cap;
+            at += bytes[i];
         }
         for pi in 0..pools.len() as u32 {
             let d = m.pools_at + pi * POOL_BYTES;

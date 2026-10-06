@@ -48,3 +48,13 @@ fn normal_length_reports_nothing() {
     assert_eq!(vm.world.pool_len[0], ROWS);
     assert!(vm.take_overruns().is_empty());
 }
+
+#[test]
+fn huge_capacity_is_an_error_not_a_panic() {
+    let m = &game1().module;
+    let e = Vm::new(m, 0x4000_0000).err().expect("1 << 30 rows must not fit");
+    let msg = format!("{e:#}");
+    assert!(msg.contains("capacity") && msg.contains("1073741824"), "{msg}");
+    assert!(Vm::new(m, u32::MAX).is_err());
+    Vm::new(m, ROWS).expect("16 rows still fit");
+}
