@@ -3,13 +3,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-fn has_wasm_target() -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
+#[path = "../../se-vm/tests/common/wasm_target.rs"]
+mod wasm_target;
 
 fn generated() -> String {
     let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/spans.wit");
@@ -29,10 +24,7 @@ fn text() {
 
 #[test]
 fn wasm() {
-    if !has_wasm_target() {
-        eprintln!("skipped: wasm32-unknown-unknown not installed");
-        return;
-    }
+    wasm_target::require_wasm_target();
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
     let file = dir.join("span_rs_probe.rs");
     let src = format!(
