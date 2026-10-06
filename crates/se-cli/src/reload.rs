@@ -99,15 +99,122 @@ pub fn stale(src: &GameSrc, out: &Path, sel: &Selection) -> Result<Vec<Unit>> {
     Ok(units)
 }
 
+/// What one poll found: nothing, a contract change, or modules to rebuild.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Plan {
+    Nothing,
+    /// The contract moved: every module and the world layout with it.
+    Restart,
+    Modules(Vec<Unit>),
+}
+
+/// Owns what a poll needs between frames: where the game is, where its
+/// outputs are, and which game and render the run chose.
+pub struct Reloader {
+    root: PathBuf,
+    out: PathBuf,
+    sel: Selection,
+    profile: String,
+}
+
+impl Reloader {
+    pub fn new(root: PathBuf, out: PathBuf, sel: Selection, profile: String) -> Self {
+        Reloader { root, out, sel, profile }
+    }
+
+    /// Re-reads the tree each call, so a module created after start is seen.
+    /// Reads mtimes only: no rustc, no Vm, no writes.
+    pub fn plan(&self) -> Result<Plan> {
+        let src = GameSrc::open(&self.root)?;
+        let units = stale(&src, &self.out, &self.sel)?;
+        Ok(match units.as_slice() {
+            [] => Plan::Nothing,
+            [Unit::Contract] => Plan::Restart,
+            _ => Plan::Modules(units),
+        })
+    }
+}
+
+#[cfg(test)]
+mod plan {
+    use super::tests::{at, fixture, T0};
+    use super::*;
+
+    fn reloader(root: &Path, out: &Path) -> Reloader {
+        let sel = Selection { game: None, render: Some("solid".into()) };
+        Reloader::new(root.into(), out.into(), sel, "debug".into())
+    }
+
+    fn mtimes(dirs: &[&Path]) -> Vec<(PathBuf, Option<SystemTime>)> {
+        let mut v = Vec::new();
+        let mut stack: Vec<PathBuf> = dirs.iter().map(|d| d.to_path_buf()).collect();
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    v.push((p.clone(), mtime(&p)));
+                }
+            }
+        }
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn untouched_tree_is_nothing() {
+        let (r, o) = fixture("plan-none");
+        assert_eq!(reloader(&r, &o).plan().unwrap(), Plan::Nothing);
+    }
+
+    #[test]
+    fn an_edited_game_module_is_one_unit() {
+        let (r, o) = fixture("plan-game");
+        at(&r.join("game/a.rs"), T0 + 20);
+        let Plan::Modules(u) = reloader(&r, &o).plan().unwrap() else { panic!("not Modules") };
+        assert_eq!(u.len(), 1);
+        assert!(matches!(&u[0], Unit::Module { category, name, .. } if category == "game" && name == "a"));
+    }
+
+    #[test]
+    fn a_newer_contract_is_a_restart() {
+        let (r, o) = fixture("plan-contract");
+        at(&r.join("contract.wit"), T0 + 20);
+        at(&r.join("game/a.rs"), T0 + 20);
+        assert_eq!(reloader(&r, &o).plan().unwrap(), Plan::Restart);
+    }
+
+    #[test]
+    fn a_module_created_after_new_is_seen() {
+        let (r, o) = fixture("plan-new");
+        let rl = reloader(&r, &o);
+        assert_eq!(rl.plan().unwrap(), Plan::Nothing);
+        at(&r.join("asset/kettle.rs"), T0 + 20);
+        let Plan::Modules(u) = rl.plan().unwrap() else { panic!("not Modules") };
+        assert!(matches!(&u[..], [Unit::Module { name, .. }] if name == "kettle"));
+    }
+
+    #[test]
+    fn planning_twice_writes_nothing() {
+        let (r, o) = fixture("plan-twice");
+        let rl = reloader(&r, &o);
+        let before = mtimes(&[&r, &o]);
+        assert_eq!(rl.plan().unwrap(), Plan::Nothing);
+        assert_eq!(rl.plan().unwrap(), Plan::Nothing);
+        assert_eq!(mtimes(&[&r, &o]), before);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs::{self, File};
     use std::time::Duration;
 
-    const T0: u64 = 1_000_000;
+    pub(super) const T0: u64 = 1_000_000;
 
-    fn at(p: &Path, secs: u64) {
+    pub(super) fn at(p: &Path, secs: u64) {
         if let Some(d) = p.parent() {
             fs::create_dir_all(d).unwrap();
         }
@@ -119,7 +226,7 @@ mod tests {
     }
 
     /// A game tree and its outputs, every output newer than every source.
-    fn fixture(tag: &str) -> (PathBuf, PathBuf) {
+    pub(super) fn fixture(tag: &str) -> (PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!("se-reload-{tag}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let root = base.join("g");
