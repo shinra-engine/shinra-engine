@@ -13,6 +13,7 @@ use crate::deck::Deck;
 use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
 use crate::reload::{Outcome, Reloader, Selection};
+use crate::report;
 use crate::savefile;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
@@ -206,8 +207,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             ide.note(o);
         }
         if let Err(e) = stepped {
-            ide.note(format!("frame failed: {e:#}"));
-            ide.mode = Mode::Edit;
+            report::frame_error(&mut ide, &e, live.vm.take_rollback());
         }
 
         let px = match command::read(&live.vm.meta, live.vm.bytes()) {
@@ -312,20 +312,11 @@ fn watch(
     rl.select(sel);
     let started = Instant::now();
     match rl.poll(live, screen) {
-        Ok(Outcome::Nothing) => {}
         Ok(Outcome::Restart) => {
             ide.note("contract changed: reopening".to_string());
             return true;
         }
-        Ok(Outcome::Changed { ok, failed }) => {
-            if !ok.is_empty() {
-                let ms = started.elapsed().as_millis();
-                ide.note(format!("reloaded {} in {ms} ms", ok.join(", ")));
-            }
-            for f in failed {
-                ide.note(format!("reload failed: {}: {}", f.unit, f.message));
-            }
-        }
+        Ok(out) => report::reload(ide, &out, started.elapsed().as_millis()),
         Err(e) => ide.note(format!("reload failed: {e:#}")),
     }
     false

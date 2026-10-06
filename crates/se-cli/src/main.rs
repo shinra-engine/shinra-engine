@@ -21,6 +21,7 @@ mod inspect;
 mod intents;
 mod live;
 mod reload;
+mod report;
 mod run;
 mod savefile;
 mod shot;
