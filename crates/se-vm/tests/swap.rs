@@ -161,3 +161,85 @@ fn a_tick_of_the_wrong_type_is_refused() -> Result<()> {
     assert_eq!(bodies(&vm)?, 3);
     Ok(())
 }
+
+/// A process module declaring one stage, `s`, that writes `transform`.
+fn process(dir: &Path, name: &str, body: &str) -> Result<Vec<u8>> {
+    use se_vm::stages::{encode, SECTION, WRITE};
+    let section = common::embed(SECTION, &encode("s", &[("transform", WRITE)]));
+    let src = format!("{}{section}{body}", common::prelude());
+    common::build(dir, name, Slot::Process, &src)
+}
+
+/// Both versions define the same statics, so at the process slot's
+/// `--global-base` v2's `LUT` lands exactly on v1's.
+const GOOD: &str = r#"
+#[no_mangle]
+pub static LUT: [u32; 4] = [1, 2, 3, 4];
+
+#[no_mangle]
+pub extern "C" fn se_stage_run__s() -> u32 {
+    unsafe {
+        let ct = col(arena::COL_TRANSFORM);
+        let x = core::ptr::read_volatile(&LUT[0]) as f32;
+        (&mut *row::<Transform>(&ct, 0)).pos[0] = x;
+        1
+    }
+}
+"#;
+
+/// Declares `s`, exports no `se_stage_run__s`.
+const BAD: &str = r#"
+#[no_mangle]
+pub static LUT: [u32; 4] = [0xFFFF_FFFF; 4];
+"#;
+
+fn pos_x(vm: &Vm) -> Result<f32> {
+    let t = vm.meta.column_index("transform").expect("transform");
+    Ok(f32::from_le_bytes(vm.read(vm.world.row_at(t, 0), 4)?.try_into().unwrap()))
+}
+
+fn names(vm: &Vm) -> Vec<String> {
+    vm.stages().iter().map(|s| s.name.clone()).collect()
+}
+
+#[test]
+fn d_a_stage_without_its_export_is_refused_and_the_old_stages_run() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("noexport")?;
+    vm.load(Slot::Process, "p1", process(&dir, "p1", GOOD)?)?;
+    let bad = "#[no_mangle] pub extern \"C\" fn se_stage_run__other() -> u32 { 0 }\n";
+    let err = vm.load(Slot::Process, "p2", process(&dir, "p2", bad)?).unwrap_err().to_string();
+    assert!(err.contains("se_stage_run__s"), "the refusal names the missing export: {err}");
+
+    assert_eq!(names(&vm), ["s"]);
+    let t = vm.meta.column_index("transform").expect("transform");
+    vm.write(vm.world.row_at(t, 0), &0f32.to_le_bytes())?;
+    vm.frame(1)?;
+    assert_eq!(pos_x(&vm)?, 1.0, "p1's stage still writes the transform column");
+    Ok(())
+}
+
+/// Fails on the instantiate-then-check order: v2's data segment would have
+/// overwritten `LUT` with 0xFFFF_FFFF before the refusal (seen: pos.x came
+/// back 4294967300.0, the u32 cast to f32).
+#[test]
+fn e_statics_survive_a_refusal() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("statics")?;
+    vm.load(Slot::Process, "v1", process(&dir, "v1", GOOD)?)?;
+    vm.frame(1)?;
+    assert_eq!(pos_x(&vm)?, 1.0);
+
+    let t = vm.meta.column_index("transform").expect("transform");
+    vm.write(vm.world.row_at(t, 0), &0f32.to_le_bytes())?;
+    assert!(vm.load(Slot::Process, "v2", process(&dir, "v2", BAD)?).is_err());
+
+    vm.frame(2)?;
+    assert_eq!(pos_x(&vm)?, 1.0, "v1's LUT is intact");
+    assert_eq!(names(&vm), ["s"]);
+    Ok(())
+}

@@ -174,10 +174,6 @@ impl Loaded {
             .with_context(|| format!("`{}` exports no {sym}(u32)", self.name))
     }
 
-    pub fn has(&self, store: &mut Store<()>, sym: &str) -> bool {
-        self.instance.get_func(&mut *store, sym).is_some()
-    }
-
     /// Every export whose name begins with `prefix`.
     ///
     /// This is how a stage is found rather than listed: `contract.wit` closes

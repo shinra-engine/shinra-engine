@@ -83,38 +83,37 @@ impl Vm {
     /// world is not in either of them.
     pub fn load(&mut self, slot: Slot, name: &str, bytes: Vec<u8>) -> Result<()> {
         let p = Loaded::prepare(&self.engine, slot, name, bytes)?;
-        let m = Loaded::commit(p, &mut self.store, self.memory)?;
-        match slot {
-            Slot::Game => self.game = Some(m),
-            Slot::Process => {
-                // Discovered, never listed. The host knows no stage by name;
-                // it reads what the module declared and checks it against the
-                // contract, which is what lets a stage written long after this
-                // host was built still load.
-                let mut declared = match m.section(stages::SECTION) {
-                    Ok(bytes) => stages::decode(bytes)
-                        .with_context(|| format!("the stage table in `{}`", m.name))?,
-                    // A module with no table has no stages. That is the right
-                    // answer for a control module or an asset, so it is not an
-                    // error here either.
-                    Err(_) => Vec::new(),
-                };
-                stages::resolve(&mut declared, &self.meta)?;
-                for s in &declared {
-                    if !m.has(&mut self.store, &s.export) {
-                        bail!(
-                            "`{}` declares stage `{}` but exports no {}",
-                            m.name,
-                            s.name,
-                            s.export
-                        )
-                    }
-                }
-                self.stages = declared;
-                self.process = Some(m);
+        if slot != Slot::Process {
+            let m = Loaded::commit(p, &mut self.store, self.memory)?;
+            match slot {
+                Slot::Game => self.game = Some(m),
+                _ => self.render = Some(m),
             }
-            Slot::Render => self.render = Some(m),
+            return Ok(());
         }
+        // Discovered, never listed. The host knows no stage by name; it reads
+        // what the module declared and checks it against the contract, which
+        // is what lets a stage written long after this host was built still
+        // load. All of it is read from the file, before instantiation: a
+        // refusal after `commit` would already have written the module's
+        // statics over the running one's.
+        let mut declared = match p.section(stages::SECTION) {
+            Ok(bytes) => stages::decode(bytes)
+                .with_context(|| format!("the stage table in `{}`", p.name))?,
+            // A module with no table has no stages. That is the right answer
+            // for a control module or an asset, so it is not an error here
+            // either.
+            Err(_) => Vec::new(),
+        };
+        stages::resolve(&mut declared, &self.meta)?;
+        for s in &declared {
+            if !p.has_export(&s.export) {
+                bail!("`{}` declares stage `{}` but exports no {}", p.name, s.name, s.export)
+            }
+        }
+        let m = Loaded::commit(p, &mut self.store, self.memory)?;
+        self.stages = declared;
+        self.process = Some(m);
         Ok(())
     }
 
