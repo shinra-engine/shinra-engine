@@ -2,6 +2,9 @@
 //!
 //! Each runaway is a module built here, the way `frame.rs` builds its own.
 
+mod common;
+use common::require_wasm_target;
+
 use anyhow::{bail, Result};
 use se_vm::memory::{Slot, STACK_SIZE};
 use se_vm::module::DEFAULT_FUEL;
@@ -9,13 +12,6 @@ use se_vm::Vm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn has_wasm_target() -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
 
 /// Exactly the flags a module must be built with. They are here, in the test,
 /// because getting any one of them wrong is a silent failure at run time:
@@ -120,9 +116,7 @@ fn chain(e: &anyhow::Error) -> String {
 
 #[test]
 fn a_spinning_stage_fails_the_frame_and_names_itself() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let dir = scratch("runaway-stage");
     let contract = contract(&dir)?;
     let section = embed(se_vm::stages::SECTION, &stage_section());
@@ -139,9 +133,7 @@ fn a_spinning_stage_fails_the_frame_and_names_itself() -> Result<()> {
 
 #[test]
 fn a_looping_start_function_fails_the_load() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let contract = contract(&scratch("runaway-start"))?;
     let mut vm = Vm::new(&contract, 16)?;
     let err = chain(&vm.load(Slot::Game, "loop", SPINNING_START.to_vec()).unwrap_err());
@@ -151,9 +143,7 @@ fn a_looping_start_function_fails_the_load() -> Result<()> {
 
 #[test]
 fn a_healthy_game_recovers_the_vm() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let dir = scratch("runaway-recover");
     let contract = contract(&dir)?;
     let spin = format!(
@@ -190,7 +180,7 @@ fn a_healthy_game_recovers_the_vm() -> Result<()> {
 /// almost untouched, or `DEFAULT_FUEL` is in the way of real games.
 #[test]
 fn a_healthy_frame_uses_a_small_fraction_of_the_budget() -> Result<()> {
-    assert!(has_wasm_target(), "wasm32-unknown-unknown is required: rustup target add wasm32-unknown-unknown");
+    require_wasm_target();
     let dir = scratch("runaway-measure");
     let contract = contract(&dir)?;
     let healthy = format!("{}{HEALTHY_GAME}", prelude());
