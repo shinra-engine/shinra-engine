@@ -11,6 +11,10 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+mod apply;
+#[cfg(test)]
+mod apply_game;
+
 /// The game and render modules the run loaded; `None` means the first one.
 pub struct Selection {
     pub game: Option<String>,

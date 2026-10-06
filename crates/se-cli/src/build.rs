@@ -163,7 +163,7 @@ fn run(mut c: Command, what: &str) -> Result<()> {
     Ok(())
 }
 
-fn compile(
+pub(crate) fn compile(
     name: &str,
     members: &[&str],
     cat: &Category,
