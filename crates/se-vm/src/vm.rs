@@ -17,6 +17,7 @@
 use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
 use crate::module::{with_budget, Loaded};
+use crate::rollback::Staged;
 use crate::save;
 use crate::stages::{self, Stage};
 use crate::world::{Meta, World, SPAN_BYTES};
@@ -30,13 +31,17 @@ pub struct Vm {
     pub memory: Memory,
     pub meta: Meta,
     pub world: World,
-    game: Option<Loaded>,
-    process: Option<Loaded>,
-    render: Option<Loaded>,
+    pub(crate) game: Option<Loaded>,
+    pub(crate) process: Option<Loaded>,
+    pub(crate) render: Option<Loaded>,
     /// The stages the current process module declared, in the order it listed
     /// them. Order is a declaration, not a consequence of filenames, so no
     /// path sorting is needed to settle it.
-    stages: Vec<Stage>,
+    pub(crate) stages: Vec<Stage>,
+    /// Swaps the next frame has yet to confirm; see `rollback.rs`.
+    pub(crate) staged: Vec<Staged>,
+    /// The slots the last failed frame put back, for the host to report.
+    pub(crate) rolled_back: Option<Vec<Slot>>,
     /// Fingerprint of the contract this VM was built from; a save carries it.
     contract_id: u64,
     /// Roster requests the host had to clamp, for the UI to show.
@@ -71,6 +76,8 @@ impl Vm {
             process: None,
             render: None,
             stages: Vec::new(),
+            staged: Vec::new(),
+            rolled_back: None,
             contract_id,
             overruns: Vec::new(),
         })
@@ -85,10 +92,8 @@ impl Vm {
         let p = Loaded::prepare(&self.engine, slot, name, bytes)?;
         if slot != Slot::Process {
             let m = Loaded::commit(p, &mut self.store, self.memory)?;
-            match slot {
-                Slot::Game => self.game = Some(m),
-                _ => self.render = Some(m),
-            }
+            let prev = self.slot_mut(slot).replace(m);
+            self.stage(slot, prev, Vec::new());
             return Ok(());
         }
         // Discovered, never listed. The host knows no stage by name; it reads
@@ -112,8 +117,9 @@ impl Vm {
             }
         }
         let m = Loaded::commit(p, &mut self.store, self.memory)?;
-        self.stages = declared;
-        self.process = Some(m);
+        let prev_stages = std::mem::replace(&mut self.stages, declared);
+        let prev = self.process.replace(m);
+        self.stage(slot, prev, prev_stages);
         Ok(())
     }
 
@@ -157,7 +163,15 @@ impl Vm {
 
     /// One frame. Returns how many rows the pipeline touched and how many
     /// commands were recorded, which is all the host needs to know.
+    ///
+    /// The first frame after a swap confirms it; one that fails puts the
+    /// previous module back (`rollback.rs`).
     pub fn frame(&mut self, n: u32) -> Result<(u32, u32)> {
+        let r = self.run_frame(n);
+        self.settle(r, &Slot::ALL)
+    }
+
+    fn run_frame(&mut self, n: u32) -> Result<(u32, u32)> {
         self.call(Slot::Game, "tick", Some(n)).context("game.wasm tick")?;
 
         // Reconcile. A control module asks for a roster by writing a pool's
@@ -329,9 +343,11 @@ impl Vm {
     /// has to stay live — a paused game you cannot see is not paused, it is
     /// off. So the graph still records and the host still replays; only
     /// control and the pipeline are skipped.
+    ///
+    /// Only the render module runs, so only a render swap is confirmed here.
     pub fn record_only(&mut self) -> Result<(u32, u32)> {
-        let cmds = self.call(Slot::Render, "record", None).context("render.wasm record")?;
-        Ok((0, cmds))
+        let r = self.call(Slot::Render, "record", None).context("render.wasm record");
+        Ok((0, self.settle(r, &[Slot::Render])?))
     }
 
     pub fn read(&self, at: u32, len: u32) -> Result<Vec<u8>> {

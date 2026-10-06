@@ -243,3 +243,83 @@ fn e_statics_survive_a_refusal() -> Result<()> {
     assert_eq!(names(&vm), ["s"]);
     Ok(())
 }
+
+/// Well formed, and traps the first time it runs.
+const TRAP_GAME: &str =
+    "#[no_mangle] pub extern \"C\" fn tick(_: u32) -> u32 { core::arch::wasm32::unreachable() }\n";
+
+const TRAP_RENDER: &str =
+    "#[no_mangle] pub extern \"C\" fn record() -> u32 { core::arch::wasm32::unreachable() }\n";
+
+#[test]
+fn f_a_trapping_game_is_rolled_back_to_the_previous_one() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("trapgame")?;
+    vm.load(Slot::Game, "game2", build(&dir, "game2", Slot::Game, TRAP_GAME)?)?;
+
+    let err = format!("{:#}", vm.frame(1).unwrap_err());
+    assert!(err.contains("rolled back"), "{err}");
+    assert_eq!(vm.take_rollback(), Some(vec![Slot::Game]));
+
+    vm.frame(1)?;
+    assert_eq!(bodies(&vm)?, 3, "v1 ticks again: 2 + 1 % 4");
+    assert_eq!(vm.take_rollback(), None);
+    Ok(())
+}
+
+/// Nothing ran before it, so there is nothing to go back to: the trapping
+/// module stays in its slot.
+#[test]
+fn g_a_first_load_that_traps_stages_no_rollback() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (g, dir) = common::contract_dir("swap-firsttrap")?;
+    let mut vm = Vm::new(&g.module, 16)?;
+    vm.load(Slot::Game, "game", build(&dir, "game", Slot::Game, TRAP_GAME)?)?;
+
+    let err = format!("{:#}", vm.frame(1).unwrap_err());
+    assert!(!err.contains("rolled back"), "{err}");
+    assert_eq!(vm.take_rollback(), None);
+    assert_eq!(vm.module(Slot::Game).map(|m| m.name.as_str()), Some("game"));
+    Ok(())
+}
+
+#[test]
+fn h_two_swaps_before_a_frame_roll_back_to_the_original() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("twoswaps")?;
+    let v2 = "#[no_mangle] pub extern \"C\" fn tick(_: u32) -> u32 { \
+              unsafe { (*(arena::LOOK as *mut Look)).bodies = 7; } 0 }\n";
+    vm.load(Slot::Game, "game2", build(&dir, "game2", Slot::Game, v2)?)?;
+    vm.load(Slot::Game, "game3", build(&dir, "game3", Slot::Game, TRAP_GAME)?)?;
+
+    assert!(vm.frame(1).is_err());
+    assert_eq!(vm.take_rollback(), Some(vec![Slot::Game]));
+    assert_eq!(vm.module(Slot::Game).map(|m| m.name.as_str()), Some("game"));
+    vm.frame(1)?;
+    assert_eq!(bodies(&vm)?, 3, "v1, not v2 (which would write 7)");
+    Ok(())
+}
+
+#[test]
+fn i_a_trapping_render_is_rolled_back_by_record_only() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("traprender")?;
+    vm.frame(1)?;
+    vm.load(Slot::Render, "render2", build(&dir, "render2", Slot::Render, TRAP_RENDER)?)?;
+
+    let err = format!("{:#}", vm.record_only().unwrap_err());
+    assert!(err.contains("rolled back"), "{err}");
+    assert_eq!(vm.take_rollback(), Some(vec![Slot::Render]));
+
+    let (_, cmds) = vm.record_only()?;
+    assert_eq!(cmds, 3, "render v1 records again");
+    Ok(())
+}
