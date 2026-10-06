@@ -10,13 +10,6 @@ use se_vm::Vm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn has_wasm_target() -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
 
 /// The flags of frame.rs `build`; see there for why each one matters.
 fn build(dir: &Path, name: &str, slot: Slot, src: &str) -> Result<Vec<u8>> {
@@ -116,10 +109,7 @@ fn bodies(vm: &Vm) -> Result<u32> {
 
 #[test]
 fn a_game_without_tick_is_refused_and_the_old_one_keeps_ticking() -> Result<()> {
-    if !has_wasm_target() {
-        eprintln!("skipping: rustup target add wasm32-unknown-unknown");
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("notick")?;
     let src = "#[no_mangle] pub extern \"C\" fn tock(n: u32) -> u32 { n }\n";
     let bytes = build(&dir, "game2", Slot::Game, src)?;
@@ -133,9 +123,7 @@ fn a_game_without_tick_is_refused_and_the_old_one_keeps_ticking() -> Result<()> 
 
 #[test]
 fn a_render_without_record_is_refused_and_the_old_one_keeps_recording() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("norecord")?;
     let src = "#[no_mangle] pub extern \"C\" fn draw() -> u32 { 0 }\n";
     let bytes = build(&dir, "render2", Slot::Render, src)?;
@@ -149,9 +137,7 @@ fn a_render_without_record_is_refused_and_the_old_one_keeps_recording() -> Resul
 
 #[test]
 fn a_tick_of_the_wrong_type_is_refused() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("badtick")?;
     let src = "#[no_mangle] pub extern \"C\" fn tick() -> u32 { 0 }\n";
     let bytes = build(&dir, "game3", Slot::Game, src)?;
@@ -204,9 +190,7 @@ fn names(vm: &Vm) -> Vec<String> {
 
 #[test]
 fn d_a_stage_without_its_export_is_refused_and_the_old_stages_run() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("noexport")?;
     vm.load(Slot::Process, "p1", process(&dir, "p1", GOOD)?)?;
     let bad = "#[no_mangle] pub extern \"C\" fn se_stage_run__other() -> u32 { 0 }\n";
@@ -226,9 +210,7 @@ fn d_a_stage_without_its_export_is_refused_and_the_old_stages_run() -> Result<()
 /// back 4294967300.0, the u32 cast to f32).
 #[test]
 fn e_statics_survive_a_refusal() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("statics")?;
     vm.load(Slot::Process, "v1", process(&dir, "v1", GOOD)?)?;
     vm.frame(1)?;
@@ -253,9 +235,7 @@ const TRAP_RENDER: &str =
 
 #[test]
 fn f_a_trapping_game_is_rolled_back_to_the_previous_one() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("trapgame")?;
     vm.load(Slot::Game, "game2", build(&dir, "game2", Slot::Game, TRAP_GAME)?)?;
 
@@ -273,9 +253,7 @@ fn f_a_trapping_game_is_rolled_back_to_the_previous_one() -> Result<()> {
 /// module stays in its slot.
 #[test]
 fn g_a_first_load_that_traps_stages_no_rollback() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (g, dir) = common::contract_dir("swap-firsttrap")?;
     let mut vm = Vm::new(&g.module, 16)?;
     vm.load(Slot::Game, "game", build(&dir, "game", Slot::Game, TRAP_GAME)?)?;
@@ -289,9 +267,7 @@ fn g_a_first_load_that_traps_stages_no_rollback() -> Result<()> {
 
 #[test]
 fn h_two_swaps_before_a_frame_roll_back_to_the_original() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("twoswaps")?;
     let v2 = "#[no_mangle] pub extern \"C\" fn tick(_: u32) -> u32 { \
               unsafe { (*(arena::LOOK as *mut Look)).bodies = 7; } 0 }\n";
@@ -308,9 +284,7 @@ fn h_two_swaps_before_a_frame_roll_back_to_the_original() -> Result<()> {
 
 #[test]
 fn i_a_trapping_render_is_rolled_back_by_record_only() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let (mut vm, dir) = setup("traprender")?;
     vm.frame(1)?;
     vm.load(Slot::Render, "render2", build(&dir, "render2", Slot::Render, TRAP_RENDER)?)?;
