@@ -9,13 +9,13 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-fn half_w(l: &Live) -> f32 {
+pub(super) fn half_w(l: &Live) -> f32 {
     let (at, _) = l.vm.meta.control_at("view").expect("view is a control var");
     f32::from_le_bytes(l.vm.read(at, 4).unwrap().try_into().unwrap())
 }
 
 /// Saved now, as an editor would: older than the poll that follows it.
-fn bump(p: &Path) {
+pub(super) fn bump(p: &Path) {
     let f = fs::File::options().write(true).open(p).unwrap();
     f.set_modified(SystemTime::now()).unwrap();
 }

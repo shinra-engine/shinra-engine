@@ -21,6 +21,8 @@ mod apply_game;
 mod apply_process;
 #[cfg(test)]
 mod failure;
+#[cfg(test)]
+mod refusal;
 
 /// The game and render modules the run loaded; `None` means the first one.
 pub struct Selection {
