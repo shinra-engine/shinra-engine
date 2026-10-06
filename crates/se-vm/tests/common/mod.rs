@@ -6,7 +6,7 @@ use se_contract::{table, wasm, Generated};
 use se_vm::world::Meta;
 use std::path::PathBuf;
 
-mod wasm_target;
+pub mod wasm_target;
 #[allow(unused_imports)]
 pub use wasm_target::require_wasm_target;
 
