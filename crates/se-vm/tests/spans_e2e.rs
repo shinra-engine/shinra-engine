@@ -7,13 +7,8 @@ use se_vm::Vm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn has_wasm_target() -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
+mod common;
+use common::require_wasm_target;
 
 fn build(dir: &Path, name: &str, slot: Slot, src: &str) -> Result<Vec<u8>> {
     let file = dir.join(format!("{name}.rs"));
@@ -69,10 +64,7 @@ pub extern "C" fn tick(_n: u32) -> u32 {
 
 #[test]
 fn a_module_reads_a_string_and_a_list_and_a_snapshot_keeps_them() -> Result<()> {
-    if !has_wasm_target() {
-        eprintln!("skipping: rustup target add wasm32-unknown-unknown");
-        return Ok(());
-    }
+    require_wasm_target();
     let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/spans.wit");
     let g = se_contract::generate(&wit)?;
     let dir = scratch("spans");

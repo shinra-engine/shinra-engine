@@ -10,13 +10,8 @@ use se_vm::Vm;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-fn has_wasm_target() -> bool {
-    Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
-        .unwrap_or(false)
-}
+mod common;
+use common::require_wasm_target;
 
 /// Exactly the flags a module must be built with. They are here, in the test,
 /// because getting any one of them wrong is a silent failure at run time:
@@ -216,10 +211,7 @@ fn build_all() -> Result<Built> {
 
 #[test]
 fn one_contract_three_modules_one_memory() -> Result<()> {
-    if !has_wasm_target() {
-        eprintln!("skipping: rustup target add wasm32-unknown-unknown");
-        return Ok(());
-    }
+    require_wasm_target();
     let b = build_all()?;
     let mut vm = Vm::new(&b.contract, 64)?;
     vm.load(Slot::Game, "game", b.game)?;
@@ -259,9 +251,7 @@ fn one_contract_three_modules_one_memory() -> Result<()> {
 
 #[test]
 fn replacing_the_control_module_leaves_the_world_alone() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let b = build_all()?;
     let mut vm = Vm::new(&b.contract, 64)?;
     vm.load(Slot::Game, "game", b.game)?;
@@ -301,9 +291,7 @@ fn replacing_the_control_module_leaves_the_world_alone() -> Result<()> {
 
 #[test]
 fn a_module_that_imports_anything_else_is_refused() -> Result<()> {
-    if !has_wasm_target() {
-        return Ok(());
-    }
+    require_wasm_target();
     let b = build_all()?;
     let src = format!(
         "{}\nextern \"C\" {{ fn se_host_please(x: u32) -> u32; }}\n\
