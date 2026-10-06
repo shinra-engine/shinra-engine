@@ -13,7 +13,7 @@ use std::path::Path;
 fn apply_process_replaces_every_stage_and_keeps_the_world() {
     let root = copy_game2(&format!("game2-process-{}", std::process::id()));
     let deck = Deck::open(&root).unwrap();
-    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None };
+    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false };
     let size = (64, 36);
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();
     let out = Path::new("target").join("shinra").join(&deck.src().name);

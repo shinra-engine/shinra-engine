@@ -54,7 +54,7 @@ pub(super) fn edit(file: &Path, from: &str, to: &str) {
 fn apply_game_swaps_the_tick_and_keeps_the_world() {
     let root = copy_game2(&format!("game2-apply-{}", std::process::id()));
     let deck = Deck::open(&root).unwrap();
-    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None };
+    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false };
     let size = (64, 36);
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();
     let out = Path::new("target").join("shinra").join(&deck.src().name);

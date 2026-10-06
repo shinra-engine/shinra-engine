@@ -20,7 +20,6 @@ mod edit;
 mod inspect;
 mod intents;
 mod live;
-#[allow(dead_code)]
 mod reload;
 mod run;
 mod savefile;
@@ -49,6 +48,7 @@ options
       --size <WxH>    framebuffer               (default 320x180)
       --save <file>   shot: write a save after the last frame
       --load <file>   shot: resume from a save, frames continue from its counter
+      --no-watch      run: do not reload modules when their sources change
 ";
 
 pub struct Args {
@@ -63,10 +63,15 @@ pub struct Args {
     pub size: (u32, u32),
     pub save: Option<PathBuf>,
     pub load: Option<PathBuf>,
+    pub watch: bool,
 }
 
 fn parse() -> Result<Args> {
-    let mut it = std::env::args().skip(1);
+    parse_from(std::env::args().skip(1))
+}
+
+fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
+    let mut it = args.into_iter();
     let cmd = it.next().unwrap_or_default();
     if cmd.is_empty() || cmd == "-h" || cmd == "--help" {
         print!("{USAGE}");
@@ -85,6 +90,7 @@ fn parse() -> Result<Args> {
         size: (320, 180),
         save: None,
         load: None,
+        watch: true,
     };
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -96,6 +102,7 @@ fn parse() -> Result<Args> {
             "-n" | "--frames" => a.frames = it.next().unwrap_or_default().parse().unwrap_or(1),
             "--save" => a.save = it.next().map(PathBuf::from),
             "--load" => a.load = it.next().map(PathBuf::from),
+            "--no-watch" => a.watch = false,
             "--size" => {
                 let s = it.next().unwrap_or_default();
                 let (w, h) = s.split_once('x').unwrap_or(("320", "180"));
@@ -127,6 +134,7 @@ fn main() -> Result<()> {
                 frames: if a.frames > 1 { Some(a.frames as u64) } else { None },
                 game: a.game.clone(),
                 render: a.render.clone(),
+                watch: a.watch,
             },
         );
     }
@@ -145,5 +153,21 @@ fn main() -> Result<()> {
         }
         "shot" => shot::run(&a, &src, &out),
         other => bail!("unknown command `{other}`\n\n{USAGE}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(s: &str) -> Args {
+        parse_from(s.split_whitespace().map(String::from)).unwrap()
+    }
+
+    #[test]
+    fn watch_flag() {
+        assert!(args("run game2").watch);
+        assert!(!args("run game2 --no-watch").watch);
+        assert!(USAGE.contains("--no-watch"));
     }
 }

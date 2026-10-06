@@ -12,6 +12,7 @@
 use crate::deck::Deck;
 use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
+use crate::reload::{Plan, Reloader, Selection};
 use crate::savefile;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
@@ -20,17 +21,24 @@ use se_gpu::command;
 use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
 use se_vm::input::Keys;
 use se_vm::memory::Slot;
-use std::time::{Duration, Instant};
+use std::path::Path;
+use std::time::{Duration, Instant, SystemTime};
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
 /// only makes the terminal the bottleneck.
 const TARGET: Duration = Duration::from_millis(33);
+
+/// How often the loop asks the disk whether a source changed. Polling mtimes
+/// is deliberate: no watcher dependency, and an edit shows within a second.
+const WATCH: Duration = Duration::from_millis(250);
 
 pub struct Options {
     pub profile: String,
     pub frames: Option<u64>,
     pub game: Option<String>,
     pub render: Option<String>,
+    /// Poll the source tree and reload what an edit made stale.
+    pub watch: bool,
 }
 
 
@@ -102,6 +110,10 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
     let t0 = Instant::now();
     let mut last = t0;
+    let mut polled = t0;
+    // The newest source when a reload last failed: the same broken tree is
+    // not recompiled every poll, only after another edit.
+    let mut failed: Option<SystemTime> = None;
     let mut index = 0u64;
     let mut areas = Areas::default();
     let mut row_map: Vec<Option<Target>> = Vec::new();
@@ -146,18 +158,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         if (it.next_game || it.prev_game) && deck.step(if it.next_game { 1 } else { -1 }) {
             ide.current = deck.current;
             ide.note(format!("→ {}", ide.games[deck.current]));
-            let mut l = Vec::new();
-            match open(&deck, &opt, screen, &mut l) {
-                Ok(g) => {
-                    live = g;
-                    ide.selected = 0;
-                    ide.mode = Mode::Edit;
-                    for m in l {
-                        ide.note(m);
-                    }
-                }
-                Err(e) => ide.note(format!("cannot load {}: {e:#}", ide.games[deck.current])),
-            }
+            reopen(&deck, &opt, screen, &mut ide, &mut live);
+            failed = None;
         }
 
         // Match the framebuffer to the panel that was actually drawn, and to
@@ -183,6 +185,15 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         // The keyboard is a control var: written before the tick, read by the
         // game at an address the contract fixed, with no host call.
         live.vm.set_input(keys_of(&term))?;
+
+        if opt.watch && polled.elapsed() >= WATCH {
+            polled = Instant::now();
+            if watch(&deck, &opt, screen, &mut ide, &mut live, &mut failed)
+                && !reopen(&deck, &opt, screen, &mut ide, &mut live)
+            {
+                failed = newest(&deck.src().root);
+            }
+        }
 
         // No tick while editing: the scene stands still so it can be read. The
         // graph still records and replays, so the picture is live either way.
@@ -257,4 +268,88 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Stand the deck's current entry up again, dropping the old game whole. On
+/// failure the running one stays and this returns false.
+fn reopen(deck: &Deck, opt: &Options, screen: (u32, u32), ide: &mut Ide, live: &mut crate::live::Live) -> bool {
+    let mut l = Vec::new();
+    match open(deck, opt, screen, &mut l) {
+        Ok(g) => {
+            *live = g;
+            ide.selected = 0;
+            ide.mode = Mode::Edit;
+            for m in l {
+                ide.note(m);
+            }
+            true
+        }
+        Err(e) => {
+            ide.note(format!("cannot load {}: {e:#}", ide.games[deck.current]));
+            false
+        }
+    }
+}
+
+/// Newest mtime of any file under `dir`.
+fn newest(dir: &Path) -> Option<SystemTime> {
+    let mut stack = vec![dir.to_path_buf()];
+    let mut best = None;
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if let Ok(t) = e.metadata().and_then(|m| m.modified()) {
+                best = best.max(Some(t));
+            }
+        }
+    }
+    best
+}
+
+/// One poll: plan, then swap what is stale. Returns true when the contract
+/// moved and the game has to be opened again. The selection is whatever is
+/// loaded now, so a swap from the Project panel is watched too.
+fn watch(
+    deck: &Deck,
+    opt: &Options,
+    screen: (u32, u32),
+    ide: &mut Ide,
+    live: &mut crate::live::Live,
+    failed: &mut Option<SystemTime>,
+) -> bool {
+    let src = deck.src();
+    if failed.is_some() && newest(&src.root) == *failed {
+        return false;
+    }
+    let name = |s: Slot| live.vm.module(s).map(|m| m.name.clone());
+    let sel = Selection { game: name(Slot::Game), render: name(Slot::Render) };
+    let out = Path::new("target").join("shinra").join(&src.name);
+    let reloader = Reloader::new(src.root.clone(), out, sel, opt.profile.clone());
+    let started = Instant::now();
+    let done = match reloader.plan() {
+        Ok(Plan::Nothing) => Ok(Vec::new()),
+        Ok(Plan::Restart) => {
+            ide.note("contract changed: reopening".to_string());
+            *failed = None;
+            return true;
+        }
+        Ok(Plan::Modules(units)) => reloader.apply(live, screen, &units),
+        Err(e) => Err(e),
+    };
+    match done {
+        Ok(names) if names.is_empty() => {}
+        Ok(names) => {
+            *failed = None;
+            let ms = started.elapsed().as_millis();
+            ide.note(format!("reloaded {} in {ms} ms", names.join(", ")));
+        }
+        Err(e) => {
+            *failed = newest(&src.root);
+            ide.note(format!("reload failed: {e:#}"));
+        }
+    }
+    false
 }
