@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// game2 copied to a temp dir, so editing it never touches the examples.
-fn copy_game2(tag: &str) -> PathBuf {
+pub(super) fn copy_game2(tag: &str) -> PathBuf {
     let root = std::env::var("SHINRA_EXAMPLES")
         .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/../../../shinra-examples").into());
     let from = Path::new(&root).join("game2");
@@ -37,14 +37,14 @@ fn half_w(l: &Live) -> f32 {
     f32::from_le_bytes(l.vm.read(at, 4).unwrap().try_into().unwrap())
 }
 
-fn sprites(l: &Live) -> (u32, Vec<u8>) {
+pub(super) fn sprites(l: &Live) -> (u32, Vec<u8>) {
     let pool = l.vm.meta.pool_index("sprites").expect("sprites pool") as usize;
     let col = l.vm.meta.column_index("sprite").expect("sprite column") as usize;
     let row0 = l.vm.read(l.vm.world.base[col], l.vm.world.stride[col]).unwrap();
     (l.vm.world.pool_len[pool], row0)
 }
 
-fn edit(file: &Path, from: &str, to: &str) {
+pub(super) fn edit(file: &Path, from: &str, to: &str) {
     let s = fs::read_to_string(file).unwrap();
     assert!(s.contains(from), "{from} not in {}", file.display());
     fs::write(file, s.replacen(from, to, 1)).unwrap();
