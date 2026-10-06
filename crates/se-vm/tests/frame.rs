@@ -4,53 +4,13 @@
 //! already compiles one: a contract is only proved by something built against
 //! it, and a fixture checked in as bytes would stop tracking the generator.
 
-use anyhow::{bail, Result};
-use se_vm::memory::{Slot, STACK_SIZE};
-use se_vm::Vm;
-use std::path::{Path, PathBuf};
-use std::process::Command;
-
 mod common;
-use common::require_wasm_target;
 
-/// Exactly the flags a module must be built with. They are here, in the test,
-/// because getting any one of them wrong is a silent failure at run time:
-///   --import-memory   or the module writes into a memory nobody reads
-///   --global-base     or two modules' statics land on each other
-///   -z stack-size     or a module's stack reaches down into the world
-fn build(dir: &Path, name: &str, slot: Slot, src: &str) -> Result<Vec<u8>> {
-    let file = dir.join(format!("{name}.rs"));
-    std::fs::write(&file, src)?;
-    let out = dir.join(format!("{name}.wasm"));
-    let o = Command::new("rustc")
-        .args(["--edition", "2021", "--target", "wasm32-unknown-unknown"])
-        .args(["--crate-type", "cdylib", "--crate-name", name])
-        .arg("-C").arg("link-arg=--import-memory")
-        .arg("-C").arg(format!("link-arg=--global-base={}", slot.global_base()))
-        .arg("-C").arg(format!("link-arg=-zstack-size={STACK_SIZE}"))
-        .arg("-C").arg("opt-level=1")
-        .arg("-C").arg("panic=abort")
-        .arg("-o").arg(&out)
-        .arg(&file)
-        .output()?;
-    if !o.status.success() {
-        bail!("building {name}:\n{}", String::from_utf8_lossy(&o.stderr));
-    }
-    Ok(std::fs::read(out)?)
-}
-
-fn prelude() -> &'static str {
-    "#![no_std]\n\
-     #[panic_handler]\n\
-     fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n\
-     include!(\"contract.rs\");\n\
-     #[inline]\n\
-     unsafe fn col(i: u32) -> Column { *((arena::COLUMNS + i * 16) as *const Column) }\n\
-     #[inline]\n\
-     unsafe fn pool(i: u32) -> Pool { *((arena::POOLS + i * 8) as *const Pool) }\n\
-     #[inline]\n\
-     unsafe fn row<T>(c: &Column, i: u32) -> *mut T { (c.base + i * c.stride) as *mut T }\n"
-}
+use anyhow::Result;
+use common::{build, contract_dir, embed, prelude, require_wasm_target};
+use se_vm::memory::Slot;
+use se_vm::Vm;
+use std::path::PathBuf;
 
 const GAME: &str = r#"
 /// The whole of a control module: it writes the control var set and nothing
@@ -79,20 +39,6 @@ fn stage_section() -> Vec<u8> {
     let mut v = encode("motion", &[("orbit", READ), ("transform", WRITE)]);
     v.extend_from_slice(&encode("settle", &[("transform", WRITE)]));
     v
-}
-
-/// Rust puts a `#[link_section]` static into a wasm custom section verbatim,
-/// which is exactly what a declaration is. `#[used]` keeps `--gc-sections`
-/// from dropping it: nothing references it, because the host reads it out of
-/// the file rather than from inside the module.
-fn embed(section: &str, bytes: &[u8]) -> String {
-    let list: Vec<String> = bytes.iter().map(|b| b.to_string()).collect();
-    format!(
-        "#[used]\n#[link_section = \"{section}\"]\npub static SECTION_{}: [u8; {}] = [{}];\n",
-        section.replace('.', "_").to_uppercase(),
-        bytes.len(),
-        list.join(",")
-    )
 }
 
 const PROCESS: &str = r#"
@@ -175,26 +121,8 @@ struct Built {
     dir: PathBuf,
 }
 
-/// Cargo runs these tests on parallel threads, so a directory keyed only by
-/// pid is shared — and rustc's intermediate objects then collide under names
-/// it picks from the crate name. One directory per build.
-fn scratch(what: &str) -> PathBuf {
-    use std::sync::atomic::{AtomicU32, Ordering};
-    static N: AtomicU32 = AtomicU32::new(0);
-    std::env::temp_dir().join(format!(
-        "se-vm-{what}-{}-{}",
-        std::process::id(),
-        N.fetch_add(1, Ordering::Relaxed)
-    ))
-}
-
 fn build_all() -> Result<Built> {
-    let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../se-contract/tests/game1.wit");
-    let g = se_contract::generate(&wit)?;
-    let dir = scratch("frame");
-    std::fs::create_dir_all(&dir)?;
-    std::fs::write(dir.join("contract.rs"), &g.rust)?;
+    let (g, dir) = contract_dir("frame")?;
     Ok(Built {
         game: build(&dir, "game", Slot::Game, &format!("{}{GAME}", prelude()))?,
         process: {
