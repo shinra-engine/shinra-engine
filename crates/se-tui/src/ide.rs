@@ -14,6 +14,7 @@
 //! it is a view of host state and owns none of it.
 
 use crate::present::Pixels;
+use crate::log::Level;
 use crate::state::{Ide, Panel};
 use crate::textart::{self, Frame as ArtFrame};
 use ratatui::prelude::*;
@@ -22,6 +23,7 @@ use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
 const ACCENT: Color = Color::Indexed(81);
 const DIM: Color = Color::Indexed(242);
 const OK: Color = Color::Indexed(250);
+const ERR: Color = Color::Indexed(203);
 
 fn panel(title: &str, focused: bool) -> Block<'_> {
     Block::default()
@@ -238,7 +240,13 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
         .rev()
         .take(room)
         .rev()
-        .map(|l| Line::from(Span::styled(l.clone(), Style::default().fg(DIM))))
+        .map(|l| {
+            let fg = match l.level {
+                Level::Info => DIM,
+                Level::Error => ERR,
+            };
+            Line::from(Span::styled(l.text.clone(), Style::default().fg(fg)))
+        })
         .collect();
     f.render_widget(Paragraph::new(lines).block(term_block), bot[1]);
 
@@ -255,3 +263,28 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
 
 /// Status line the runner prints under the panels when there is room.
 pub const HELP: &str = " r run/stop · n next game · m glyphs · tab panel · ctrl+h/v/i/f/t focus · q quit · F5 save · F9 load";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+
+    #[test]
+    fn an_error_draws_red_one_line_at_a_time() {
+        let mut ide = Ide::default();
+        ide.error("error[E0425]: cannot find value `x`\n --> game/game2.rs:10:5");
+        let mut term = ratatui::Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| {
+            draw(f, &ide, None);
+        })
+        .unwrap();
+        let buf = term.backend().buffer();
+        let w = buf.area.width as usize;
+        let text: String = buf.content.iter().map(|c| c.symbol()).collect();
+        let at = text.find("error[E0425]").expect("error line drawn");
+        assert!(text.contains("--> game/game2.rs:10:5"));
+        let i = text[..at].chars().count();
+        let cell = &buf[((i % w) as u16, (i / w) as u16)];
+        assert_eq!(cell.fg, Color::Indexed(203));
+    }
+}

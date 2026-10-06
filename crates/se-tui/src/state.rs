@@ -101,7 +101,7 @@ pub struct Ide {
     /// Which project lines are modules that can be swapped in. Filled by the host.
     pub project_pick: Vec<bool>,
     pub project_sel: usize,
-    pub log: Vec<String>,
+    pub log: crate::log::Log,
 
     pub focused: Panel,
     pub mode: Mode,
@@ -129,7 +129,7 @@ impl Default for Ide {
             project: Vec::new(),
             project_pick: Vec::new(),
             project_sel: 0,
-            log: Vec::new(),
+            log: crate::log::Log::default(),
             focused: Panel::default(),
             mode: Mode::default(),
             art: crate::textart::TextArtMode::Mixed,
@@ -284,10 +284,12 @@ impl Ide {
     }
 
     pub fn note(&mut self, s: impl Into<String>) {
-        self.log.push(s.into());
-        if self.log.len() > 200 {
-            self.log.remove(0);
-        }
+        self.log.push(&s.into(), crate::log::Level::Info);
+    }
+
+    /// Like `note`, drawn in red. A multi-line message is split and capped.
+    pub fn error(&mut self, s: impl Into<String>) {
+        self.log.push(&s.into(), crate::log::Level::Error);
     }
 }
 
