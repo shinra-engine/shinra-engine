@@ -16,7 +16,8 @@
 use crate::memory::Slot;
 use anyhow::{bail, Context, Result};
 use wasmtime::{
-    Engine, Instance, Linker, Memory, Module as WasmModule, Store, Trap, TypedFunc,
+    Engine, ExternType, Instance, Linker, Memory, Module as WasmModule, Store, Trap, TypedFunc,
+    ValType,
 };
 
 /// What one entry into wasm may spend before it is cut off. A frame crosses
@@ -49,6 +50,26 @@ pub struct Loaded {
     pub bytes: Vec<u8>,
 }
 
+/// A module compiled and checked, but not instantiated: nothing it carries
+/// has touched the shared memory yet, so refusing it costs nothing.
+pub struct Prepared {
+    pub name: String,
+    pub slot: Slot,
+    module: WasmModule,
+    bytes: Vec<u8>,
+}
+
+impl Prepared {
+    pub fn section(&self, name: &str) -> Result<&[u8]> {
+        se_contract::wasm::section(&self.bytes, name)
+            .with_context(|| format!("in `{}`", self.name))
+    }
+
+    pub fn has_export(&self, sym: &str) -> bool {
+        self.module.get_export(sym).is_some()
+    }
+}
+
 /// Everything a module is allowed to ask the host for.
 const MEMORY_IMPORT: (&str, &str) = ("env", "memory");
 
@@ -79,28 +100,58 @@ fn check_shape(name: &str, m: &WasmModule) -> Result<()> {
     Ok(())
 }
 
-impl Loaded {
-    pub fn open(
-        engine: &Engine,
-        store: &mut Store<()>,
-        memory: Memory,
-        slot: Slot,
-        name: &str,
-        bytes: Vec<u8>,
-    ) -> Result<Loaded> {
-        let m = WasmModule::from_binary(engine, &bytes)
-            .with_context(|| format!("`{name}` is not a wasm module"))?;
-        check_shape(name, &m)?;
+/// The entry point a slot calls every frame, as (symbol, i32 params,
+/// how the refusal spells it). A process module's stages are checked against
+/// its own declaration instead.
+fn entry(slot: Slot) -> Option<(&'static str, usize, &'static str)> {
+    match slot {
+        Slot::Game => Some(("tick", 1, "tick(u32)")),
+        Slot::Render => Some(("record", 0, "record()")),
+        Slot::Process => None,
+    }
+}
 
-        let mut linker = Linker::new(engine);
+/// Checked on the compiled module, before any instance exists: a game with no
+/// `tick` would otherwise replace the running one and fail every frame.
+fn check_entry(name: &str, slot: Slot, m: &WasmModule) -> Result<()> {
+    let Some((sym, params, shown)) = entry(slot) else { return Ok(()) };
+    let ok = match m.get_export(sym) {
+        Some(ExternType::Func(f)) => {
+            let i32s = |v: Vec<ValType>, n: usize| {
+                v.len() == n && v.iter().all(|t| matches!(t, ValType::I32))
+            };
+            i32s(f.params().collect(), params) && i32s(f.results().collect(), 1)
+        }
+        _ => false,
+    };
+    if !ok {
+        bail!("`{name}` exports no {shown} -> u32; the {} slot calls it every frame", slot.name())
+    }
+    Ok(())
+}
+
+impl Loaded {
+    /// Compile and check. No store and no memory are in reach, so a refusal
+    /// here cannot have changed anything.
+    pub fn prepare(engine: &Engine, slot: Slot, name: &str, bytes: Vec<u8>) -> Result<Prepared> {
+        let module = WasmModule::from_binary(engine, &bytes)
+            .with_context(|| format!("`{name}` is not a wasm module"))?;
+        check_shape(name, &module)?;
+        check_entry(name, slot, &module)?;
+        Ok(Prepared { name: name.to_string(), slot, module, bytes })
+    }
+
+    /// Instantiate: from here the module's data segments are in the memory.
+    pub fn commit(p: Prepared, store: &mut Store<()>, memory: Memory) -> Result<Loaded> {
+        let engine = p.module.engine().clone();
+        let mut linker = Linker::new(&engine);
         linker.define(&mut *store, MEMORY_IMPORT.0, MEMORY_IMPORT.1, memory)?;
         // Instantiation runs a start function, so it is the second way in.
-        let instance = with_budget(store, &format!("`{name}` instantiation"), |s| {
-            linker.instantiate(&mut *s, &m).map_err(Into::into)
+        let instance = with_budget(store, &format!("`{}` instantiation", p.name), |s| {
+            linker.instantiate(&mut *s, &p.module).map_err(Into::into)
         })
-        .with_context(|| format!("instantiating `{name}` into the {} slot", slot.name()))?;
-
-        Ok(Loaded { name: name.to_string(), slot, instance, bytes })
+        .with_context(|| format!("instantiating `{}` into the {} slot", p.name, p.slot.name()))?;
+        Ok(Loaded { name: p.name, slot: p.slot, instance, bytes: p.bytes })
     }
 
     /// A section the module carries as data — `se.wgsl` for a render module,

@@ -82,7 +82,8 @@ impl Vm {
     /// statics land on the same `--global-base` as the old one's, and the
     /// world is not in either of them.
     pub fn load(&mut self, slot: Slot, name: &str, bytes: Vec<u8>) -> Result<()> {
-        let m = Loaded::open(&self.engine, &mut self.store, self.memory, slot, name, bytes)?;
+        let p = Loaded::prepare(&self.engine, slot, name, bytes)?;
+        let m = Loaded::commit(p, &mut self.store, self.memory)?;
         match slot {
             Slot::Game => self.game = Some(m),
             Slot::Process => {

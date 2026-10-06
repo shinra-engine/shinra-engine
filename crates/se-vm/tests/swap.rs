@@ -1,0 +1,163 @@
+//! A swap is refused before it can touch anything: a game or render module
+//! without its entry point never gets an instance, and the one it would have
+//! replaced keeps running.
+
+mod common;
+
+use anyhow::{bail, Result};
+use se_vm::memory::{Slot, STACK_SIZE};
+use se_vm::Vm;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+fn has_wasm_target() -> bool {
+    Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-unknown-unknown"))
+        .unwrap_or(false)
+}
+
+/// The flags of frame.rs `build`; see there for why each one matters.
+fn build(dir: &Path, name: &str, slot: Slot, src: &str) -> Result<Vec<u8>> {
+    let file = dir.join(format!("{name}.rs"));
+    std::fs::write(&file, format!("{}{src}", prelude()))?;
+    let out = dir.join(format!("{name}.wasm"));
+    let o = Command::new("rustc")
+        .args(["--edition", "2021", "--target", "wasm32-unknown-unknown"])
+        .args(["--crate-type", "cdylib", "--crate-name", name])
+        .arg("-C").arg("link-arg=--import-memory")
+        .arg("-C").arg(format!("link-arg=--global-base={}", slot.global_base()))
+        .arg("-C").arg(format!("link-arg=-zstack-size={STACK_SIZE}"))
+        .arg("-C").arg("opt-level=1")
+        .arg("-C").arg("panic=abort")
+        .arg("-o").arg(&out)
+        .arg(&file)
+        .output()?;
+    if !o.status.success() {
+        bail!("building {name}:\n{}", String::from_utf8_lossy(&o.stderr));
+    }
+    Ok(std::fs::read(out)?)
+}
+
+fn prelude() -> &'static str {
+    "#![no_std]\n\
+     #[panic_handler]\n\
+     fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n\
+     include!(\"contract.rs\");\n\
+     #[inline]\n\
+     unsafe fn pool(i: u32) -> Pool { *((arena::POOLS + i * 8) as *const Pool) }\n"
+}
+
+const GAME: &str = r#"
+#[no_mangle]
+pub extern "C" fn tick(n: u32) -> u32 {
+    unsafe {
+        let look = &mut *(arena::LOOK as *mut Look);
+        look.bodies = 2 + n % 4;
+        look.asset = n % 2;
+        look.graph = n / 2 % 2;
+        let cam = &mut *(arena::CAMERA as *mut Camera);
+        cam.eye = [0.0, 1.5, 6.0];
+        cam.fov = 0.9;
+        cam.yaw = n as f32 * 0.25;
+        0
+    }
+}
+"#;
+
+const RENDER: &str = r#"
+#[no_mangle]
+pub extern "C" fn record() -> u32 {
+    unsafe {
+        let look = &*(arena::LOOK as *const Look);
+        let n = look.bodies.min(pool(arena::POOL_BODIES).cap);
+        let zero = Command {
+            kind: 0, vertices: 0, shader: 0, column: u32::MAX, count: 0,
+            uniform_off: 0, uniform_len: 0, pad: 0,
+            clear_r: 0.0, clear_g: 0.0, clear_b: 0.0, clear_a: 1.0,
+        };
+        let cmds = arena::COMMANDS as *mut Command;
+        *cmds.add(0) = Command { kind: 0, ..zero };
+        *cmds.add(1) = Command {
+            kind: 1, column: arena::COL_TRANSFORM, count: n,
+            uniform_off: arena::CAMERA, uniform_len: Camera::SIZE, ..zero
+        };
+        *cmds.add(2) = Command { kind: 3, ..zero };
+        let f = &mut *(arena::FRAME as *mut Frame);
+        f.commands = arena::COMMANDS;
+        f.count = 3;
+        f.present = 0;
+        f.epoch = f.epoch.wrapping_add(1);
+        3
+    }
+}
+"#;
+
+/// One directory per test: they run on parallel threads and rustc's
+/// intermediates would collide.
+fn setup(what: &str) -> Result<(Vm, PathBuf)> {
+    let g = common::game1();
+    let dir = std::env::temp_dir().join(format!("se-vm-swap-{what}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("contract.rs"), &g.rust)?;
+    let mut vm = Vm::new(&g.module, 16)?;
+    vm.load(Slot::Game, "game", build(&dir, "game", Slot::Game, GAME)?)?;
+    vm.load(Slot::Render, "render", build(&dir, "render", Slot::Render, RENDER)?)?;
+    Ok((vm, dir))
+}
+
+fn bodies(vm: &Vm) -> Result<u32> {
+    let (at, _) = vm.meta.control_at("look").expect("game1 declares look");
+    let r = vm.meta.record("look").expect("look is a record");
+    let off = r.fields.iter().find(|f| f.name == "bodies").expect("look.bodies").offset;
+    Ok(u32::from_le_bytes(vm.read(at + off, 4)?.try_into().unwrap()))
+}
+
+#[test]
+fn a_game_without_tick_is_refused_and_the_old_one_keeps_ticking() -> Result<()> {
+    if !has_wasm_target() {
+        eprintln!("skipping: rustup target add wasm32-unknown-unknown");
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("notick")?;
+    let src = "#[no_mangle] pub extern \"C\" fn tock(n: u32) -> u32 { n }\n";
+    let bytes = build(&dir, "game2", Slot::Game, src)?;
+    let err = vm.load(Slot::Game, "game2", bytes).unwrap_err().to_string();
+    assert!(err.contains("tick"), "the refusal names the missing export: {err}");
+
+    vm.frame(1)?;
+    assert_eq!(bodies(&vm)?, 3, "the previous game still ticks: 2 + 1 % 4");
+    Ok(())
+}
+
+#[test]
+fn a_render_without_record_is_refused_and_the_old_one_keeps_recording() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("norecord")?;
+    let src = "#[no_mangle] pub extern \"C\" fn draw() -> u32 { 0 }\n";
+    let bytes = build(&dir, "render2", Slot::Render, src)?;
+    let err = vm.load(Slot::Render, "render2", bytes).unwrap_err().to_string();
+    assert!(err.contains("record"), "the refusal names the missing export: {err}");
+
+    let (_, cmds) = vm.frame(1)?;
+    assert_eq!(cmds, 3, "render v1 still records");
+    Ok(())
+}
+
+#[test]
+fn a_tick_of_the_wrong_type_is_refused() -> Result<()> {
+    if !has_wasm_target() {
+        return Ok(());
+    }
+    let (mut vm, dir) = setup("badtick")?;
+    let src = "#[no_mangle] pub extern \"C\" fn tick() -> u32 { 0 }\n";
+    let bytes = build(&dir, "game3", Slot::Game, src)?;
+    let err = vm.load(Slot::Game, "game3", bytes).unwrap_err().to_string();
+    assert!(err.contains("tick"), "{err}");
+    vm.frame(1)?;
+    assert_eq!(bodies(&vm)?, 3);
+    Ok(())
+}
