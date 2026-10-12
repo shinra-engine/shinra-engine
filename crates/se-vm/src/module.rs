@@ -15,7 +15,31 @@
 
 use crate::memory::Slot;
 use anyhow::{bail, Context, Result};
-use wasmtime::{Engine, Instance, Linker, Memory, Module as WasmModule, Store, TypedFunc};
+use wasmtime::{
+    Engine, Instance, Linker, Memory, Module as WasmModule, Store, Trap, TypedFunc,
+};
+
+/// What one entry into wasm may spend before it is cut off. A frame crosses
+/// into a module a handful of times and each stage is a tight loop, so this is
+/// far above anything healthy and still trips in well under a second.
+pub const DEFAULT_FUEL: u64 = 200_000_000;
+
+/// Give the store a fresh budget, run `f`, and say so if the budget was what
+/// ended it. `what` names the entry: a module's symbol, or its instantiation.
+pub fn with_budget<T>(
+    store: &mut Store<()>,
+    what: &str,
+    f: impl FnOnce(&mut Store<()>) -> Result<T>,
+) -> Result<T> {
+    store.set_fuel(DEFAULT_FUEL)?;
+    f(store).map_err(|e| {
+        if e.downcast_ref::<Trap>() == Some(&Trap::OutOfFuel) {
+            e.context(format!("{what} ran out of its budget of {DEFAULT_FUEL} fuel"))
+        } else {
+            e
+        }
+    })
+}
 
 pub struct Loaded {
     pub name: String,
@@ -70,9 +94,11 @@ impl Loaded {
 
         let mut linker = Linker::new(engine);
         linker.define(&mut *store, MEMORY_IMPORT.0, MEMORY_IMPORT.1, memory)?;
-        let instance = linker
-            .instantiate(&mut *store, &m)
-            .with_context(|| format!("instantiating `{name}` into the {} slot", slot.name()))?;
+        // Instantiation runs a start function, so it is the second way in.
+        let instance = with_budget(store, &format!("`{name}` instantiation"), |s| {
+            linker.instantiate(&mut *s, &m).map_err(Into::into)
+        })
+        .with_context(|| format!("instantiating `{name}` into the {} slot", slot.name()))?;
 
         Ok(Loaded { name: name.to_string(), slot, instance, bytes })
     }

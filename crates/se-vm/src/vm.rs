@@ -16,13 +16,13 @@
 
 use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
-use crate::module::Loaded;
+use crate::module::{with_budget, Loaded};
 use crate::save;
 use crate::stages::{self, Stage};
 use crate::world::{Meta, World, SPAN_BYTES};
 use anyhow::{bail, Context, Result};
 use se_contract::read::Table;
-use wasmtime::{Engine, Memory, MemoryType, Store};
+use wasmtime::{Config, Engine, Memory, MemoryType, Store};
 
 pub struct Vm {
     pub engine: Engine,
@@ -52,7 +52,9 @@ impl Vm {
         let table = Table::new(table_bytes)?;
         let meta = Meta::read(&table)?;
 
-        let engine = Engine::default();
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config)?;
         let mut store = Store::new(&engine, ());
         let pages = required_pages();
         let memory = Memory::new(&mut store, MemoryType::new(pages, Some(pages)))
@@ -136,16 +138,21 @@ impl Vm {
         let Some((inst, name)) = self.module(slot).map(|m| (m.instance, m.name.clone())) else {
             return Ok(0);
         };
-        Ok(match arg {
-            Some(a) => inst
-                .get_typed_func::<u32, u32>(&mut self.store, sym)
-                .with_context(|| format!("`{name}` exports no {sym}(u32)"))?
-                .call(&mut self.store, a)?,
-            None => inst
-                .get_typed_func::<(), u32>(&mut self.store, sym)
-                .with_context(|| format!("`{name}` exports no {sym}()"))?
-                .call(&mut self.store, ())?,
-        })
+        let what = format!("`{name}` {sym}");
+        match arg {
+            Some(a) => {
+                let f = inst
+                    .get_typed_func::<u32, u32>(&mut self.store, sym)
+                    .with_context(|| format!("`{name}` exports no {sym}(u32)"))?;
+                with_budget(&mut self.store, &what, |s| f.call(s, a).map_err(Into::into))
+            }
+            None => {
+                let f = inst
+                    .get_typed_func::<(), u32>(&mut self.store, sym)
+                    .with_context(|| format!("`{name}` exports no {sym}()"))?;
+                with_budget(&mut self.store, &what, |s| f.call(s, ()).map_err(Into::into))
+            }
+        }
     }
 
     /// One frame. Returns how many rows the pipeline touched and how many
