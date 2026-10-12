@@ -1,0 +1,37 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  engine:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: shinra-engine
+
+      # Sibling layout: the script reads ../shinra-examples.
+      - uses: actions/checkout@v4
+        with:
+          repository: shinra-engine/shinra-examples
+          path: shinra-examples
+
+      # Same version and target as the Dockerfile; do not lower it.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.0
+          targets: wasm32-unknown-unknown
+
+      # Software Vulkan (lavapipe), as in the Docker image.
+      - run: sudo apt-get install -y --no-install-recommends cmake pkg-config mesa-vulkan-drivers libvulkan1
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: shinra-engine
+
+      - run: bash scripts/ci.sh
+        working-directory: shinra-engine
+        env:
+          SHINRA_ENGINE: ${{ github.workspace }}/shinra-engine

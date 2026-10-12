@@ -53,5 +53,20 @@ services:
       - cargo:/cargo
     working_dir: /engine
 
+  # The same script CI runs: build, test, build examples, shoot them.
+  #   docker compose --profile test run --rm ci
+  ci:
+    profiles: ["test"]
+    build:
+      context: .
+      network: host
+    command: ["bash", "scripts/ci.sh"]
+    environment:
+      EXAMPLES: /examples
+    volumes:
+      - .:/engine
+      - ../shinra-examples:/examples
+      - cargo:/cargo
+    working_dir: /engine
 volumes:
   cargo:
