@@ -21,7 +21,6 @@ pub struct ModuleSrc {
     /// Module name — the file stem.
     pub name: String,
     pub file: PathBuf,
-    pub category: String,
 }
 
 #[derive(Debug)]
@@ -36,7 +35,6 @@ pub struct Category {
 #[derive(Debug)]
 pub struct GameSrc {
     pub name: String,
-    #[allow(dead_code)]
     pub root: PathBuf,
     pub contract: PathBuf,
     pub categories: Vec<Category>,
@@ -94,7 +92,6 @@ impl GameSrc {
                 .map(|f| ModuleSrc {
                     name: stem(f),
                     file: f.clone(),
-                    category: cat.to_string(),
                 })
                 .collect();
             // A folder named after a sibling `.rs` is private to that module;

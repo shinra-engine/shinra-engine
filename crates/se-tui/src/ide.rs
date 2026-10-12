@@ -261,9 +261,6 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
     }
 }
 
-/// Status line the runner prints under the panels when there is room.
-pub const HELP: &str = " r run/stop · n next game · m glyphs · tab panel · ctrl+h/v/i/f/t focus · q quit · F5 save · F9 load";
-
 #[cfg(test)]
 mod tests {
     use super::*;

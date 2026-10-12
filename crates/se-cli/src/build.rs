@@ -82,8 +82,6 @@ impl Engine {
 }
 
 pub struct Built {
-    #[allow(dead_code)]
-    pub out: PathBuf,
     pub contract: PathBuf,
     pub modules: Vec<(String, String, PathBuf)>,
 }
@@ -235,5 +233,5 @@ pub fn build(src: &GameSrc, out: &Path, profile: &str) -> Result<Built> {
             }
         }
     }
-    Ok(Built { out: out.to_path_buf(), contract: contract_wasm, modules })
+    Ok(Built { contract: contract_wasm, modules })
 }

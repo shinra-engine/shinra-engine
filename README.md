@@ -133,7 +133,7 @@ target/debug/shinra shot  ../shinra-examples/game1 -n 3 --size 160x90 > f.ppm
 beside it the passes in execution order, the loaded modules, and a log. Every
 render pipeline gets a TUI, because the terminal is a presenter like any other.
 
-`esc` quits · `ctrl-r` reloads · `shift-←/→` swipes to another game.
+`esc` quits.
 
 ### No GPU?
 

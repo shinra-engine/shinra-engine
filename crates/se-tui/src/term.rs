@@ -61,7 +61,6 @@ pub struct Intent {
     pub focus: Option<crate::state::Panel>,
     /// Where the mouse was pressed, for the host to resolve against panels.
     pub click: Option<(u16, u16)>,
-    pub reload: bool,
     /// F5 / F9 — quick save and quick load, in both modes.
     pub save: bool,
     pub load: bool,
@@ -118,8 +117,6 @@ pub struct Terminal {
     prev_down: [u8; KEY_COUNT],
     pub input: Input,
     pub quit: bool,
-    pub swipe: i32,
-    pub reload: bool,
     pub intent: Intent,
     /// Set by the host before each poll. While playing, the keyboard is the
     /// game's and the IDE keeps only the keys that leave or switch a run.
@@ -155,8 +152,6 @@ impl Terminal {
             prev_down: [0; KEY_COUNT],
             input: Input::zeroed(),
             quit: false,
-            swipe: 0,
-            reload: false,
             intent: Intent::default(),
             typing: false,
             on_inspector: false,
@@ -176,8 +171,6 @@ impl Terminal {
 
     /// Drain pending events and rebuild `input` for this frame.
     pub fn poll(&mut self) -> Result<()> {
-        self.swipe = 0;
-        self.reload = false;
         self.intent = Intent::default();
         self.input.pressed = [0; KEY_COUNT];
         self.input.released = [0; KEY_COUNT];
@@ -204,7 +197,6 @@ impl Terminal {
             }
             self.prev_down[i] = down as u8;
         }
-        self.input.swipe = self.swipe as i8;
         Ok(())
     }
 
@@ -222,7 +214,6 @@ impl Terminal {
             };
             match k.code {
                 KeyCode::Char('c') => self.quit = true,
-                KeyCode::Char('r') => self.reload = true,
                 _ => {}
             }
             return;
@@ -334,7 +325,7 @@ impl Terminal {
             }
             KeyCode::Up => self.intent.select = -1,
             KeyCode::Down => self.intent.select = 1,
-            // Unshifted, because shift+arrow is the swipe below.
+            // Unshifted: shift+arrow reaches the game.
             KeyCode::Right | KeyCode::Enter if !k.modifiers.contains(KeyModifiers::SHIFT) => {
                 self.intent.expand = Some(true);
                 return;
@@ -344,21 +335,6 @@ impl Terminal {
                 return;
             }
             _ => {}
-        }
-
-        // GameTok: a horizontal swipe is how you leave one game for the next.
-        if k.modifiers.contains(KeyModifiers::SHIFT) {
-            match k.code {
-                KeyCode::Right => {
-                    self.swipe = 1;
-                    return;
-                }
-                KeyCode::Left => {
-                    self.swipe = -1;
-                    return;
-                }
-                _ => {}
-            }
         }
 
         if let Some(code) = map(k.code) {

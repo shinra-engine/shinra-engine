@@ -49,15 +49,6 @@ pub const PANEL_ORDER: [Panel; 5] = [
 ];
 
 impl Panel {
-    pub fn title(self) -> &'static str {
-        match self {
-            Panel::Hierarchy => "Hierarchy",
-            Panel::Viewport => "Viewport",
-            Panel::Inspector => "Inspector",
-            Panel::Project => "Project",
-            Panel::Terminal => "Terminal",
-        }
-    }
     pub fn next(self) -> Panel {
         let i = PANEL_ORDER.iter().position(|&p| p == self).unwrap_or(0);
         PANEL_ORDER[(i + 1) % PANEL_ORDER.len()]
