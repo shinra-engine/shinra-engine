@@ -120,8 +120,16 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let gpu = Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), column, w, h)?;
     eprintln!("  adapter: {}", gpu.adapter());
 
+    let mut start = 0u32;
+    if let Some(file) = &a.load {
+        let (frame, _) = crate::savefile::read_from(&mut vm, file, &src.name)
+            .with_context(|| format!("loading {}", file.display()))?;
+        start = frame as u32;
+        eprintln!("  loaded {} at frame {start}", file.display());
+    }
+    let end = start + a.frames.max(1);
     let mut pixels = Vec::new();
-    for f in 0..a.frames.max(1) {
+    for f in start..end {
         let (rows, _) = vm.frame(f)?;
         let (cmds, epoch) = command::read(&vm.meta, vm.bytes())?;
         let report = gpu.replay(&vm.meta, &vm.world, vm.bytes(), &cmds)?;
@@ -130,6 +138,11 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
             "  frame {f}: rows {rows}, epoch {epoch}, {} draws, {} instances",
             report.draws, report.instances
         );
+    }
+
+    if let Some(file) = &a.save {
+        let note = crate::savefile::write_to(&vm, file, end as u64)?;
+        eprintln!("  {note} -> {}", file.display());
     }
 
     // P6: the smallest thing a viewer will open, and it costs no dependency.

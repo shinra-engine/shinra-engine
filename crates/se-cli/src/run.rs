@@ -12,6 +12,7 @@
 use crate::deck::Deck;
 use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
+use crate::savefile;
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RTerminal;
@@ -121,6 +122,22 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
         let it = term.intent;
         crate::intents::apply(it, &mut ide, &mut live.vm, &row_map, &areas);
+
+        if it.save {
+            match savefile::save(&live.vm, deck.src().name.as_str(), index) {
+                Ok(m) => ide.note(m),
+                Err(e) => ide.note(format!("save failed: {e:#}")),
+            }
+        }
+        if it.load {
+            match savefile::load(&mut live.vm, deck.src().name.as_str()) {
+                Ok((f, m)) => {
+                    index = f;
+                    ide.note(m);
+                }
+                Err(e) => ide.note(format!("load failed: {e:#}")),
+            }
+        }
         if it.swap {
             crate::swap::swap_selected(&mut ide, &mut live, deck.src(), &project_ids, screen);
         }

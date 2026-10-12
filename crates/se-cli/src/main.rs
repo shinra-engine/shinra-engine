@@ -21,6 +21,7 @@ mod inspect;
 mod intents;
 mod live;
 mod run;
+mod savefile;
 mod shot;
 mod swap;
 
@@ -44,6 +45,8 @@ options
       --release       optimise modules
   -n, --frames <N>    how many frames to render (default 1)
       --size <WxH>    framebuffer               (default 320x180)
+      --save <file>   shot: write a save after the last frame
+      --load <file>   shot: resume from a save, frames continue from its counter
 ";
 
 pub struct Args {
@@ -56,6 +59,8 @@ pub struct Args {
     pub profile: String,
     pub frames: u32,
     pub size: (u32, u32),
+    pub save: Option<PathBuf>,
+    pub load: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -76,6 +81,8 @@ fn parse() -> Result<Args> {
         profile: "debug".into(),
         frames: 1,
         size: (320, 180),
+        save: None,
+        load: None,
     };
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -85,6 +92,8 @@ fn parse() -> Result<Args> {
             "--process" => a.process = it.next(),
             "--release" => a.profile = "release".into(),
             "-n" | "--frames" => a.frames = it.next().unwrap_or_default().parse().unwrap_or(1),
+            "--save" => a.save = it.next().map(PathBuf::from),
+            "--load" => a.load = it.next().map(PathBuf::from),
             "--size" => {
                 let s = it.next().unwrap_or_default();
                 let (w, h) = s.split_once('x').unwrap_or(("320", "180"));

@@ -17,6 +17,7 @@
 use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
 use crate::module::Loaded;
+use crate::save;
 use crate::stages::{self, Stage};
 use crate::world::{Meta, World, SPAN_BYTES};
 use anyhow::{bail, Context, Result};
@@ -36,6 +37,8 @@ pub struct Vm {
     /// them. Order is a declaration, not a consequence of filenames, so no
     /// path sorting is needed to settle it.
     stages: Vec<Stage>,
+    /// Fingerprint of the contract this VM was built from; a save carries it.
+    contract_id: u64,
 }
 
 impl Vm {
@@ -43,6 +46,7 @@ impl Vm {
     pub fn new(contract_wasm: &[u8], rows: u32) -> Result<Vm> {
         let table_bytes = se_contract::wasm::section(contract_wasm, se_contract::table::SECTION)
             .context("contract.wasm carries no se.contract section")?;
+        let contract_id = save::fingerprint(table_bytes);
         let table = Table::new(table_bytes)?;
         let meta = Meta::read(&table)?;
 
@@ -63,6 +67,7 @@ impl Vm {
             process: None,
             render: None,
             stages: Vec::new(),
+            contract_id,
         })
     }
 
@@ -267,6 +272,35 @@ impl Vm {
     /// Put one back. The world resumes; the modules never knew.
     pub fn restore(&mut self, bytes: &[u8]) -> Result<()> {
         self.write(self.meta.base, bytes)
+    }
+
+    /// A save file: header plus the arena. `frame` is the host's counter,
+    /// which is not in the arena.
+    pub fn save(&self, frame: u32) -> Vec<u8> {
+        save::encode(self.contract_id, frame, self.meta.base, &self.snapshot())
+    }
+
+    /// Load a save made by `save`. Everything is checked before memory is
+    /// touched, so a refusal leaves the world as it was. Returns the frame.
+    pub fn load_save(&mut self, bytes: &[u8]) -> Result<u32> {
+        let (h, payload) = save::decode(bytes)?;
+        if h.id != self.contract_id {
+            bail!("save is from a different game: its contract differs from this one's")
+        }
+        if h.base != self.meta.base {
+            bail!("save arena base 0x{:x} differs from this contract's 0x{:x}", h.base, self.meta.base)
+        }
+        let end = h.base as u64 + h.len as u64;
+        if end > crate::memory::heap_limit() as u64 {
+            bail!("save reaches 0x{end:x}, past the heap limit 0x{:x}", crate::memory::heap_limit())
+        }
+        self.restore(payload)?;
+        self.world.blob_top = end as u32;
+        for p in 0..self.world.pool_len.len() as u32 {
+            self.world.pool_len[p as usize] =
+                self.world.len_of(&self.meta, &self.memory, &self.store, p)?;
+        }
+        Ok(h.frame)
     }
 
     /// Record a frame without advancing one.

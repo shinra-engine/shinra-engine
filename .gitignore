@@ -13,3 +13,13 @@ target/shinra/
 *.swo
 .DS_Store
 .claude/
+# Build output that task-85/86 stopped ignoring along with the trees they deleted.
+tests/snapshots/
+vscode-ext/out/
+node_modules/
+vscode-ext/node_modules/
+dist/
+web/games/
+web/pkg/
+# Compiled wasm modules are always build output.
+*.wasm

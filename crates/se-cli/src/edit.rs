@@ -11,6 +11,7 @@ fn name(ty: Ty) -> String {
         Ty::I32 => "i32".into(),
         Ty::U32 => "u32".into(),
         Ty::Vec(n) => format!("vec{n}"),
+        Ty::Span => "span".into(),
     }
 }
 
@@ -33,6 +34,8 @@ pub fn encode(ty: Ty, text: &str) -> Result<Vec<u8>> {
         Ty::F32 => float(ty, text)?.to_le_bytes().to_vec(),
         Ty::I32 => text.parse::<i32>().map_err(|_| bad())?.to_le_bytes().to_vec(),
         Ty::U32 => text.parse::<u32>().map_err(|_| bad())?.to_le_bytes().to_vec(),
+        // A span is an (offset, len) into a blob, not something to type in.
+        Ty::Span => bail!("a span cannot be edited as text"),
         Ty::Vec(n) => {
             let words: Vec<&str> = text
                 .split(|c: char| c == ',' || c == '[' || c == ']' || c.is_whitespace())

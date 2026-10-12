@@ -92,7 +92,7 @@ fn f32_at(m: &[u8], at: u32) -> f32 {
 /// The list the module wrote this frame, and the epoch it stamped.
 pub fn read(meta: &Meta, mem: &[u8]) -> Result<(Vec<Command>, u32)> {
     let f = meta.frame;
-    if (f + FRAME_BYTES) as usize > mem.len() {
+    if f as u64 + FRAME_BYTES as u64 > mem.len() as u64 {
         bail!("the frame header is outside the memory")
     }
     let at = u32_at(mem, f);
@@ -103,10 +103,11 @@ pub fn read(meta: &Meta, mem: &[u8]) -> Result<(Vec<Command>, u32)> {
     }
     let mut out = Vec::with_capacity(count as usize);
     for i in 0..count {
-        let c = at + i * COMMAND_BYTES;
-        if (c + COMMAND_BYTES) as usize > mem.len() {
+        let end = at as u64 + (i as u64 + 1) * COMMAND_BYTES as u64;
+        if end > mem.len() as u64 {
             bail!("command {i} is outside the memory")
         }
+        let c = end as u32 - COMMAND_BYTES;
         out.push(Command {
             kind: u32_at(mem, c),
             vertices: u32_at(mem, c + 4),

@@ -6,6 +6,7 @@
 //! surface, not of the engine — a windowed presenter fills `Input` exactly.
 
 use anyhow::Result;
+use crate::slot::{slot_key, SlotKey};
 use crate::state::Panel;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
@@ -61,6 +62,9 @@ pub struct Intent {
     /// Where the mouse was pressed, for the host to resolve against panels.
     pub click: Option<(u16, u16)>,
     pub reload: bool,
+    /// F5 / F9 — quick save and quick load, in both modes.
+    pub save: bool,
+    pub load: bool,
 }
 
 /// Where stderr goes while the IDE owns the screen.
@@ -234,6 +238,15 @@ impl Terminal {
                 KeyCode::Char(c) => self.intent.type_char = Some(c),
                 _ => {}
             }
+            return;
+        }
+
+        match slot_key(k.code) {
+            Some(SlotKey::Save) => self.intent.save = true,
+            Some(SlotKey::Load) => self.intent.load = true,
+            None => {}
+        }
+        if slot_key(k.code).is_some() {
             return;
         }
 

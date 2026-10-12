@@ -258,13 +258,3 @@ fn contract_wit_to_pixels() -> Result<()> {
     assert!(differing > (W * H / 2) as usize, "only {differing} pixels differ");
     Ok(())
 }
-
-#[test]
-fn a_frame_that_opens_no_pass_is_refused() -> Result<()> {
-    // Cheap to check and worth checking: an empty command list means the
-    // module recorded nothing, which is a bug in it, not an empty screen.
-    use se_gpu::command::Command;
-    let c: Vec<Command> = Vec::new();
-    assert!(c.is_empty());
-    Ok(())
-}

@@ -8,6 +8,7 @@
 pub mod ide;
 mod keys;
 pub mod present;
+pub mod slot;
 pub mod state;
 pub mod textart;
 pub mod term;
@@ -15,6 +16,7 @@ pub mod term;
 pub use ide::{draw, Areas, HELP};
 pub use keys::{key, Input, KEY_COUNT};
 pub use present::{pixel_size, Pixels};
+pub use slot::SlotKey;
 pub use state::{Ide, Mode, Node, Panel, PANEL_ORDER};
 pub use textart::{TextArtMode, TextCell};
 pub use term::{Edit, Intent, Terminal};
