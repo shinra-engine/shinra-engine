@@ -6,7 +6,7 @@
 //! stage left them.
 
 use crate::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS};
-use crate::Gpu;
+use crate::{Gpu, INSTANCE_CAP, UNIFORM_BYTES};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
 
@@ -71,6 +71,22 @@ impl Gpu {
                         d.column
                     )
                 }
+                if d.count > INSTANCE_CAP {
+                    bail!(
+                        "draw of {} instances exceeds the {INSTANCE_CAP} the instance buffer holds",
+                        d.count
+                    )
+                }
+                let pool = world.pool_of.get(d.column as usize).copied().unwrap_or(u32::MAX);
+                if let Some(cap) = world.pool_cap.get(pool as usize).copied() {
+                    if d.count > cap {
+                        let name = meta
+                            .components
+                            .get(d.column as usize)
+                            .map_or("?", |c| c.name.as_str());
+                        bail!("draw names {} rows of `{name}` but the pool holds only {cap}", d.count)
+                    }
+                }
                 let desc = meta.columns_at + d.column * COLUMN_BYTES;
                 let base = u32_at(mem, desc) as usize;
                 let stride = u32_at(mem, desc + 8) as usize;
@@ -84,6 +100,12 @@ impl Gpu {
                 report.draws += 1;
                 report.instances += d.count;
             }
+            if d.uniform_len > UNIFORM_BYTES {
+                bail!(
+                    "uniform of {} bytes exceeds the {UNIFORM_BYTES}-byte uniform buffer",
+                    d.uniform_len
+                )
+            }
             if d.uniform_len > 0 {
                 let u = d.uniform_off as usize;
                 let bytes = mem
@@ -92,7 +114,6 @@ impl Gpu {
                 self.queue.write_buffer(&self.uniform, 0, bytes);
             }
         }
-        let _ = world;
 
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,

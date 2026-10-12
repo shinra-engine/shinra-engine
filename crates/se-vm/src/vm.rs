@@ -39,6 +39,8 @@ pub struct Vm {
     stages: Vec<Stage>,
     /// Fingerprint of the contract this VM was built from; a save carries it.
     contract_id: u64,
+    /// Roster requests the host had to clamp, for the UI to show.
+    overruns: Vec<String>,
 }
 
 impl Vm {
@@ -68,6 +70,7 @@ impl Vm {
             render: None,
             stages: Vec::new(),
             contract_id,
+            overruns: Vec::new(),
         })
     }
 
@@ -158,6 +161,11 @@ impl Vm {
             let cap = self.world.pool_cap[p as usize];
             if asked > cap {
                 self.set_len(p, cap)?;
+                let name = &self.meta.pools[p as usize].name;
+                let msg = format!("game asked pool `{name}` for {asked} rows; capacity is {cap}");
+                if self.overruns.last() != Some(&msg) {
+                    self.overruns.push(msg);
+                }
             } else {
                 self.world.pool_len[p as usize] = asked;
             }
@@ -180,6 +188,11 @@ impl Vm {
 
         let cmds = self.call(Slot::Render, "record", None).context("render.wasm record")?;
         Ok((rows, cmds))
+    }
+
+    /// The clamps `frame` applied since the last call.
+    pub fn take_overruns(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.overruns)
     }
 
     /// Hand the keyboard to the game.

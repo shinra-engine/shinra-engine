@@ -191,6 +191,9 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         } else {
             live.vm.record_only()
         };
+        for o in live.vm.take_overruns() {
+            ide.note(o);
+        }
         if let Err(e) = stepped {
             ide.note(format!("frame failed: {e:#}"));
             ide.mode = Mode::Edit;

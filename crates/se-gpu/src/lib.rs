@@ -44,6 +44,11 @@ pub struct Gpu {
     instance_column: u32,
 }
 
+/// Instances the instance buffer holds.
+pub const INSTANCE_CAP: u32 = 4096;
+/// Bytes the uniform buffer holds.
+pub const UNIFORM_BYTES: u32 = 256;
+
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn vertex_format(ty: Ty) -> Result<wgpu::VertexFormat> {
@@ -171,13 +176,13 @@ impl Gpu {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniform"),
-            size: 256,
+            size: UNIFORM_BYTES as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("a column, verbatim"),
-            size: (rec.size as u64) * 4096,
+            size: (rec.size as u64) * INSTANCE_CAP as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });

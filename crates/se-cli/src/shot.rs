@@ -91,6 +91,9 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
 
     // One frame first, so the module can say what it wants drawn.
     let (rows, n) = vm.frame(0)?;
+    for o in vm.take_overruns() {
+        eprintln!("  {o}");
+    }
     let (cmds, _) = command::read(&vm.meta, vm.bytes())?;
     if n == 0 {
         bail!("render.wasm recorded no commands");
@@ -131,6 +134,9 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let mut pixels = Vec::new();
     for f in start..end {
         let (rows, _) = vm.frame(f)?;
+        for o in vm.take_overruns() {
+            eprintln!("  {o}");
+        }
         let (cmds, epoch) = command::read(&vm.meta, vm.bytes())?;
         let report = gpu.replay(&vm.meta, &vm.world, vm.bytes(), &cmds)?;
         pixels = gpu.pixels()?;
