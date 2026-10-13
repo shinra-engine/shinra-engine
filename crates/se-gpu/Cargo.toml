@@ -8,6 +8,7 @@ se-contract.workspace = true
 se-vm.workspace = true
 anyhow.workspace = true
 wgpu.workspace = true
+image.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster.workspace = true

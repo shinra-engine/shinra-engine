@@ -12,8 +12,11 @@
 
 pub mod command;
 pub mod replay;
+pub mod resources;
 
 pub use replay::Report;
+pub use resources::Resource;
+use resources::Loaded;
 
 use anyhow::{bail, Context, Result};
 use se_contract::layout::Ty;
@@ -40,6 +43,10 @@ pub struct Gpu {
     bind_layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     instances: wgpu::Buffer,
+    resources: Vec<Option<Loaded>>,
+    sampler: wgpu::Sampler,
+    /// 1x1 white, bound when a draw names no texture.
+    white: wgpu::TextureView,
     /// The column the pipeline's vertex layout was built for.
     instance_column: u32,
 }
@@ -110,16 +117,34 @@ impl Gpu {
 
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: None,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
@@ -187,6 +212,18 @@ impl Gpu {
             mapped_at_creation: false,
         });
 
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let white = resources::upload_texture(
+            &device,
+            &queue,
+            &resources::ImageData { width: 1, height: 1, rgba: vec![255; 4] },
+        )
+        .view;
+
         Ok(Gpu {
             device,
             queue,
@@ -196,8 +233,26 @@ impl Gpu {
             bind_layout,
             uniform,
             instances,
+            resources: Vec::new(),
+            sampler,
+            white,
             instance_column,
         })
+    }
+
+    /// Register (or replace) the mesh or texture an asset id names.
+    pub fn set_resource(&mut self, id: u32, r: Resource) {
+        let loaded = match r {
+            Resource::Mesh(m) => Loaded::Mesh(resources::upload_mesh(&self.device, &m)),
+            Resource::Texture(t) => {
+                Loaded::Texture(resources::upload_texture(&self.device, &self.queue, &t))
+            }
+        };
+        let id = id as usize;
+        if self.resources.len() <= id {
+            self.resources.resize_with(id + 1, || None);
+        }
+        self.resources[id] = Some(loaded);
     }
 
     pub fn adapter(&self) -> &str {

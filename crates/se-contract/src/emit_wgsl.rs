@@ -104,11 +104,24 @@ pub fn emit(c: &Contract) -> Result<String> {
 
     out.push_str("// --- instance inputs: the same records, with locations ---\n\n");
     for r in c.components() {
+        if r.fields.len() > 14 {
+            bail!(
+                "instance input `{}` has {} fields; locations 0..13 are the limit, 14 and 15 belong to MeshVertex",
+                r.name,
+                r.fields.len()
+            );
+        }
         let _ = writeln!(out, "struct {}Instance {{", upper_camel(&r.name));
         for (i, f) in r.fields.iter().enumerate() {
             let _ = writeln!(out, "    @location({i}) {}: {},", snake(&f.name), f.ty.wgsl());
         }
         out.push_str("};\n\n");
     }
+    out.push_str(
+        "// --- mesh vertices and the texture a draw binds ---\n\n\
+         struct MeshVertex { @location(14) pos: vec3<f32>, @location(15) normal: vec3<f32> };\n\
+         @group(0) @binding(1) var se_tex: texture_2d<f32>;\n\
+         @group(0) @binding(2) var se_samp: sampler;\n",
+    );
     Ok(out)
 }
