@@ -14,6 +14,7 @@
 //! addresses the contract fixed — which is why a module can be replaced
 //! between any two frames.
 
+use crate::clock;
 use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
 use crate::module::{with_budget, Loaded};
@@ -172,6 +173,7 @@ impl Vm {
     }
 
     fn run_frame(&mut self, n: u32) -> Result<(u32, u32)> {
+        self.set_clock(clock::Clock::at(n))?;
         self.call(Slot::Game, "tick", Some(n)).context("game.wasm tick")?;
 
         // Reconcile. A control module asks for a roster by writing a pool's
@@ -245,6 +247,32 @@ impl Vm {
             }
         }
         self.write(at, &keys.to_bytes())
+    }
+
+    /// Write `control.clock`. Time is the host's: `run_frame` calls this before
+    /// every tick, so no game ever keeps its own. Checked like `set_input`.
+    pub fn set_clock(&mut self, c: clock::Clock) -> Result<()> {
+        let Some((at, len)) = self.meta.control_at("clock") else {
+            return Ok(());
+        };
+        if len != clock::BYTES {
+            bail!("`control.clock` is {len} bytes; this engine writes {}", clock::BYTES)
+        }
+        let r = self
+            .meta
+            .record("clock")
+            .context("the contract names a `clock` control var but declares no record")?;
+        for (name, off) in clock::FIELDS {
+            let f = r
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .with_context(|| format!("`control.clock` has no `{name}`"))?;
+            if f.offset != off {
+                bail!("`control.clock.{name}` is at {}; this engine writes {off}", f.offset)
+            }
+        }
+        self.write(at, &c.to_bytes())
     }
 
     /// Copy an asset's bytes into the blob region and publish its span.
