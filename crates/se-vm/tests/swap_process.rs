@@ -47,7 +47,7 @@ fn v1(dir: &Path) -> Result<Vec<u8>> {
 }
 
 fn process(dir: &Path, name: &str, stages: &[&str], lut: u32, s: &str, t: &str) -> Result<Vec<u8>> {
-    let table: Vec<u8> = stages.iter().flat_map(|n| encode(n, &[("transform", WRITE)])).collect();
+    let table: Vec<u8> = stages.iter().flat_map(|n| encode(n, se_vm::stages::ROW, &[("transform", WRITE, 0)])).collect();
     let body = TEMPLATE
         .replace("{LUT}", &format!("{lut:#x}"))
         .replace("{S}", s)

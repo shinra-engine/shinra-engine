@@ -6,7 +6,8 @@ use se_vm::stages::{self, Stage, READ, WRITE};
 use se_vm::world::Meta;
 
 fn stage(name: &str, params: &[(&str, u32)]) -> Stage {
-    let mut v = stages::decode(&stages::encode(name, params)).expect("decode");
+    let params: Vec<(&str, u32, u32)> = params.iter().map(|&(n, a)| (n, a, 0)).collect();
+    let mut v = stages::decode(&stages::encode(name, stages::ROW, &params)).expect("decode");
     assert_eq!(v.len(), 1);
     v.remove(0)
 }

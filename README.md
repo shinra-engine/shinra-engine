@@ -181,6 +181,19 @@ fn orbit(o: &mut Orbit, t: &mut Transform) {
 }
 ```
 
+Two rows at once — a hit, a pull — is `#[se::pair]`. Each parameter is one row of
+one pool, as a tuple of components:
+
+```rust
+// process/hit.rs — D: every pair of rows; one pool visits i<j once, two pools i×j
+#[se::pair]
+fn hit((a, sa): (&mut Actor, &Sprite), (b, sb): (&mut Actor, &Sprite)) {
+    if overlaps(sa, sb) { a.hp -= 1.0; b.hp -= 1.0; }
+}
+```
+
+Stages run in name order, so a pipeline that needs one stage first names it so.
+
 `#[se::stage]` writes an `se.stages` entry naming each component and whether it
 is `&` or `&mut`, and exports the batched loop — the per-row loop runs inside
 the module, one boundary crossing per stage. The host checks the entry against

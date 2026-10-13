@@ -22,9 +22,11 @@
 //! still reads.
 //!
 //! ```text
-//! entry   "SEST" | entry_len | version | n_params | name_len | name…
-//!         then per param:  access | name_len | name…
+//! entry   "SEST" | entry_len | version | kind | n_params | name_len | name…
+//!         then per param:  access | group | name_len | name…
 //! ```
+//! `kind` is [`ROW`] (one tuple of columns per call) or [`PAIR`] (two tuples:
+//! `group` 0 and 1). A row stage puts every param in group 0.
 //! Every scalar is a little-endian `u32`; every name is padded to four bytes.
 //! A param names a *component*, not a column index: which index a column gets
 //! is the contract's business, and a module should not have to know it.
@@ -33,7 +35,7 @@ use anyhow::{bail, Context, Result};
 
 pub const SECTION: &str = "se.stages";
 pub const MAGIC: &[u8; 4] = b"SEST";
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// What `#[se::stage]` names the export. A stage is discovered by this prefix,
 /// never listed by the host.
 pub const RUN_PREFIX: &str = "se_stage_run__";
@@ -41,10 +43,17 @@ pub const RUN_PREFIX: &str = "se_stage_run__";
 pub const READ: u32 = 0;
 pub const WRITE: u32 = 1;
 
+/// A stage over single rows (`#[se::stage]`).
+pub const ROW: u32 = 0;
+/// A stage over pairs of rows (`#[se::pair]`).
+pub const PAIR: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub component: String,
     pub access: u32,
+    /// Which tuple of a pair stage the param belongs to; 0 for a row stage.
+    pub group: u32,
     /// Filled in by [`resolve`], once the contract has been consulted.
     pub column: u32,
 }
@@ -52,6 +61,7 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Stage {
     pub name: String,
+    pub kind: u32,
     pub params: Vec<Param>,
     /// `se_stage_run__<name>`, resolved once at load.
     pub export: String,
@@ -76,37 +86,42 @@ pub fn decode(section: &[u8]) -> Result<Vec<Stage>> {
     let mut out = Vec::new();
     let mut at = 0usize;
     while at < section.len() {
-        if section.len() - at < 20 {
+        if section.len() - at < 24 {
             bail!("a stage entry at {at} is too short for its header")
         }
         if &section[at..at + 4] != MAGIC {
             bail!("the stage entry at {at} does not begin with SEST")
         }
         let entry_len = u32_at(section, at + 4)? as usize;
-        if entry_len < 20 || at + entry_len > section.len() {
+        if entry_len < 24 || at + entry_len > section.len() {
             bail!("the stage entry at {at} claims {entry_len} bytes")
         }
         let version = u32_at(section, at + 8)?;
         if version != VERSION {
-            bail!("a stage entry is version {version}, this engine reads {VERSION}")
+            bail!("stage table version {version}; this engine reads {VERSION} — rebuild the module")
         }
-        let n_params = u32_at(section, at + 12)? as usize;
-        let name_len = u32_at(section, at + 16)? as usize;
-        let name = name_at(section, at + 20, name_len)?;
+        let kind = u32_at(section, at + 12)?;
+        if kind != ROW && kind != PAIR {
+            bail!("a stage entry has kind {kind}")
+        }
+        let n_params = u32_at(section, at + 16)? as usize;
+        let name_len = u32_at(section, at + 20)? as usize;
+        let name = name_at(section, at + 24, name_len)?;
 
-        let mut p = at + 20 + pad4(name_len);
+        let mut p = at + 24 + pad4(name_len);
         let mut params = Vec::with_capacity(n_params);
         for _ in 0..n_params {
             let access = u32_at(section, p)?;
-            let len = u32_at(section, p + 4)? as usize;
-            let component = name_at(section, p + 8, len)?;
-            params.push(Param { component, access, column: u32::MAX });
-            p += 8 + pad4(len);
+            let group = u32_at(section, p + 4)?;
+            let len = u32_at(section, p + 8)? as usize;
+            let component = name_at(section, p + 12, len)?;
+            params.push(Param { component, access, group, column: u32::MAX });
+            p += 12 + pad4(len);
         }
         if p > at + entry_len {
             bail!("stage `{name}` declares more than its entry holds")
         }
-        out.push(Stage { export: format!("{RUN_PREFIX}{name}"), name, params });
+        out.push(Stage { export: format!("{RUN_PREFIX}{name}"), name, kind, params });
         at += entry_len;
     }
     // Declaration order within one static is preserved, but the order the
@@ -119,7 +134,7 @@ pub fn decode(section: &[u8]) -> Result<Vec<Stage>> {
 
 /// Build one entry — the encoder the macro will use, kept beside the decoder
 /// so the two cannot drift.
-pub fn encode(name: &str, params: &[(&str, u32)]) -> Vec<u8> {
+pub fn encode(name: &str, kind: u32, params: &[(&str, u32, u32)]) -> Vec<u8> {
     fn put(v: &mut Vec<u8>, x: u32) {
         v.extend_from_slice(&x.to_le_bytes());
     }
@@ -129,11 +144,13 @@ pub fn encode(name: &str, params: &[(&str, u32)]) -> Vec<u8> {
     }
     let mut body = Vec::new();
     put(&mut body, VERSION);
+    put(&mut body, kind);
     put(&mut body, params.len() as u32);
     put(&mut body, name.len() as u32);
     put_name(&mut body, name);
-    for (comp, access) in params {
+    for (comp, access, group) in params {
         put(&mut body, *access);
+        put(&mut body, *group);
         put(&mut body, comp.len() as u32);
         put_name(&mut body, comp);
     }

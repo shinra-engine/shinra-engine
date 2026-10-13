@@ -153,7 +153,7 @@ fn a_tick_of_the_wrong_type_is_refused() -> Result<()> {
 /// A process module declaring one stage, `s`, that writes `transform`.
 fn process(dir: &Path, name: &str, body: &str) -> Result<Vec<u8>> {
     use se_vm::stages::{encode, SECTION, WRITE};
-    let section = common::embed(SECTION, &encode("s", &[("transform", WRITE)]));
+    let section = common::embed(SECTION, &encode("s", se_vm::stages::ROW, &[("transform", WRITE, 0)]));
     let src = format!("{}{section}{body}", common::prelude());
     common::build(dir, name, Slot::Process, &src)
 }

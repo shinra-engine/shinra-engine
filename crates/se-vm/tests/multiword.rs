@@ -31,7 +31,7 @@ fn on_ground_resolves_to_its_column() -> anyhow::Result<()> {
     assert!(g.rust.contains("COL_ON_GROUND"), "emitter must name the column COL_ON_GROUND");
 
     let vm = Vm::new(&g.module, 8)?;
-    let mut ss = stages::decode(&stages::encode("f", &[("on-ground", WRITE)]))?;
+    let mut ss = stages::decode(&stages::encode("f", stages::ROW, &[("on-ground", WRITE, 0)]))?;
     stages::resolve(&mut ss, &vm.meta)?;
 
     let want = vm.meta.components.iter().position(|r| r.name == "on-ground").unwrap() as u32;

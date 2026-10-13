@@ -5,6 +5,8 @@ use quote::quote;
 use syn::{parse_macro_input, ItemFn};
 
 mod asset;
+mod common;
+mod pair;
 mod stage;
 
 const GONE: &str = "components are declared in contract.wit, not in Rust — \
@@ -56,6 +58,24 @@ pub fn stage(
         .into()
 }
 
+/// Make a function a stage over pairs of rows: two tuple parameters, each one
+/// row of one pool.
+#[proc_macro_attribute]
+pub fn pair(
+    attr: proc_macro::TokenStream,
+    item: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "#[se::pair] takes no arguments — the signature is the whole spec",
+        )
+        .into_compile_error()
+        .into();
+    }
+    let f = parse_macro_input!(item as ItemFn);
+    pair::pair(f).unwrap_or_else(syn::Error::into_compile_error).into()
+}
 
 #[cfg(test)]
 mod tests {

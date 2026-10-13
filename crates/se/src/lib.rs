@@ -34,6 +34,9 @@
 /// loop that runs the body over every row of the pool.
 pub use se_macro::stage;
 
+/// `#[se::pair]` — a stage over pairs of rows; see `se_macro::pair`.
+pub use se_macro::pair;
+
 /// `se::asset!("dir/model.obj")` — an asset module's whole body.
 pub use se_macro::asset;
 

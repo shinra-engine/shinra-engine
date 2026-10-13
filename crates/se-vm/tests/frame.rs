@@ -36,8 +36,8 @@ pub extern "C" fn tick(n: u32) -> u32 {
 /// and writes `transform`, `settle` only writes `transform`.
 fn stage_section() -> Vec<u8> {
     use se_vm::stages::{encode, READ, WRITE};
-    let mut v = encode("motion", &[("orbit", READ), ("transform", WRITE)]);
-    v.extend_from_slice(&encode("settle", &[("transform", WRITE)]));
+    let mut v = encode("motion", se_vm::stages::ROW, &[("orbit", READ, 0), ("transform", WRITE, 0)]);
+    v.extend_from_slice(&encode("settle", se_vm::stages::ROW, &[("transform", WRITE, 0)]));
     v
 }
 

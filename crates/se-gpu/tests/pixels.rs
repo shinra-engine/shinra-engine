@@ -149,7 +149,7 @@ fn embed(section: &str, bytes: &[u8]) -> String {
 
 fn stage_section() -> Vec<u8> {
     use se_vm::stages::{encode, READ, WRITE};
-    encode("place", &[("orbit", READ), ("transform", WRITE)])
+    encode("place", se_vm::stages::ROW, &[("orbit", READ, 0), ("transform", WRITE, 0)])
 }
 
 #[test]

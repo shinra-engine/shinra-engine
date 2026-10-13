@@ -83,7 +83,7 @@ fn scratch(what: &str) -> PathBuf {
 const SPIN: &str = "loop { unsafe { core::ptr::read_volatile(&0u32) }; }";
 
 fn stage_section() -> Vec<u8> {
-    se_vm::stages::encode("motion", &[("orbit", se_vm::stages::READ), ("transform", se_vm::stages::WRITE)])
+    se_vm::stages::encode("motion", se_vm::stages::ROW, &[("orbit", se_vm::stages::READ, 0), ("transform", se_vm::stages::WRITE, 0)])
 }
 
 const HEALTHY_GAME: &str = r#"
