@@ -116,6 +116,39 @@ fn emit_arena(out: &mut String, c: &Contract, m: &Map) {
     out.push_str("}\n\n");
 }
 
+/// What `render.wasm` records and the host replays. Only when the contract
+/// has the engine's `render.command` (it always does).
+fn emit_render(out: &mut String, c: &Contract) {
+    let has = c.records.iter().any(|r| {
+        r.name == "command"
+            && ["kind", "column", "mesh", "texture", "clear-a"]
+                .iter()
+                .all(|n| r.fields.iter().any(|f| f.name.replace('_', "-") == *n))
+    });
+    if !has {
+        return;
+    }
+    out.push_str(
+        "/// What `render.wasm` records and the host replays.\n\
+         #[allow(dead_code)]\npub mod render {\n\
+         \x20   use super::Command;\n\
+         \x20   pub const BEGIN_PASS: u32 = 0;\n\
+         \x20   pub const DRAW_INSTANCED: u32 = 1;\n\
+         \x20   pub const DRAW_FULLSCREEN: u32 = 2;\n\
+         \x20   pub const END_PASS: u32 = 3;\n\
+         \x20   /// No mesh / no texture / no column.\n\
+         \x20   pub const NONE: u32 = u32::MAX;\n\
+         \x20   pub const BLANK: Command = Command {\n\
+         \x20       kind: BEGIN_PASS,\n\
+         \x20       column: NONE,\n\
+         \x20       mesh: NONE,\n\
+         \x20       texture: NONE,\n\
+         \x20       clear_a: 1.0,\n\
+         \x20       ..Command::ZERO\n\
+         \x20   };\n}\n\n",
+    );
+}
+
 /// The columns of each pool, so the host can place them and a module can walk
 /// them without naming each one.
 fn emit_pools(out: &mut String, c: &Contract) {
@@ -224,6 +257,7 @@ pub fn emit(c: &Contract, m: &Map, id: u64) -> String {
     out.push_str(&format!(
         "/// FNV-1a of the contract table; every module built from this file carries it.\npub const CONTRACT_ID: u64 = 0x{id:016x};\n"
     ));
+    emit_render(&mut out, c);
     emit_pools(&mut out, c);
     emit_vertex(&mut out, c);
     out

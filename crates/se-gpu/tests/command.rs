@@ -20,7 +20,8 @@ fn words(w: &[u32]) -> Vec<u8> {
 
 fn encode(c: &Command) -> Vec<u8> {
     let mut b = words(&[
-        c.kind, c.vertices, c.shader, c.column, c.count, c.uniform_off, c.uniform_len, 0,
+        c.kind, c.vertices, c.shader, c.column, c.count, c.uniform_off, c.uniform_len, c.mesh,
+        c.texture,
     ]);
     for f in c.clear {
         b.extend_from_slice(&f.to_le_bytes());
@@ -42,6 +43,8 @@ fn sample(i: u32) -> Command {
         count: 100 + i,
         uniform_off: 4096 + i * 64,
         uniform_len: 64 + i,
+        mesh: i,
+        texture: 7 + i,
         clear: [0.25 * i as f32, 0.5, 0.75, 1.0],
     }
 }

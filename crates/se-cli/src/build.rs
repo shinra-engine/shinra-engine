@@ -148,7 +148,10 @@ fn root_for(members: &[&str], cat: &Category, contract_rs: &Path, assets: &[Stri
         s.push_str(&format!("    pub const {}: u32 = {i};\n", a.to_uppercase().replace('-', "_")));
     }
     s.push_str(&format!("    pub const N: u32 = {};\n}}\n", assets.len()));
-    s.push_str(&format!("#[path = {dir:?}]\nmod {} {{\n", cat.name));
+    // `render` is the contract's own module (kind constants, BLANK), so the
+    // category's modules live under another name.
+    let cat_mod = if cat.name == "render" { "render_modules" } else { cat.name.as_str() };
+    s.push_str(&format!("#[path = {dir:?}]\nmod {cat_mod} {{\n"));
     for sh in &cat.shared {
         s.push_str(&format!("    pub mod {sh};\n"));
     }

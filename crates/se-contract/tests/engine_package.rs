@@ -20,7 +20,7 @@ fn engine_records_are_injected() {
     let g = se_contract::generate(&wit("game1.wit")).expect("game1.wit generates");
     let want = [
         ("span", 8), ("column", 16), ("pool", 8), ("clock", 16),
-        ("input", 24), ("command", 48), ("frame", 16),
+        ("input", 24), ("command", 52), ("frame", 16),
     ];
     for (name, size) in want {
         let r = g.contract.records.iter().find(|r| r.name == name).expect(name);

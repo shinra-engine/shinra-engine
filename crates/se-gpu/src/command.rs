@@ -16,9 +16,11 @@ pub const BEGIN_PASS: u32 = 0;
 pub const DRAW_INSTANCED: u32 = 1;
 pub const DRAW_FULLSCREEN: u32 = 2;
 pub const END_PASS: u32 = 3;
+/// No mesh / no texture / no column.
+pub const NONE: u32 = u32::MAX;
 
 /// `render::command`, as this engine reads it.
-const COMMAND_FIELDS: [(&str, u32); 12] = [
+const COMMAND_FIELDS: [(&str, u32); 13] = [
     ("kind", 0),
     ("vertices", 4),
     ("shader", 8),
@@ -26,16 +28,17 @@ const COMMAND_FIELDS: [(&str, u32); 12] = [
     ("count", 16),
     ("uniform_off", 20),
     ("uniform_len", 24),
-    ("pad", 28),
-    ("clear_r", 32),
-    ("clear_g", 36),
-    ("clear_b", 40),
-    ("clear_a", 44),
+    ("mesh", 28),
+    ("texture", 32),
+    ("clear_r", 36),
+    ("clear_g", 40),
+    ("clear_b", 44),
+    ("clear_a", 48),
 ];
 const FRAME_FIELDS: [(&str, u32); 4] =
     [("commands", 0), ("count", 4), ("present", 8), ("epoch", 12)];
 
-pub const COMMAND_BYTES: u32 = 48;
+pub const COMMAND_BYTES: u32 = 52;
 pub const FRAME_BYTES: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +52,10 @@ pub struct Command {
     pub count: u32,
     pub uniform_off: u32,
     pub uniform_len: u32,
+    /// Asset id of the mesh, or `NONE`.
+    pub mesh: u32,
+    /// Asset id of the texture, or `NONE`.
+    pub texture: u32,
     pub clear: [f32; 4],
 }
 
@@ -116,11 +123,13 @@ pub fn read(meta: &Meta, mem: &[u8]) -> Result<(Vec<Command>, u32)> {
             count: u32_at(mem, c + 16),
             uniform_off: u32_at(mem, c + 20),
             uniform_len: u32_at(mem, c + 24),
+            mesh: u32_at(mem, c + 28),
+            texture: u32_at(mem, c + 32),
             clear: [
-                f32_at(mem, c + 32),
                 f32_at(mem, c + 36),
                 f32_at(mem, c + 40),
                 f32_at(mem, c + 44),
+                f32_at(mem, c + 48),
             ],
         });
     }

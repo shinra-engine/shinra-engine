@@ -59,7 +59,10 @@ interface render {
     count: u32,
     uniform-off: u32,
     uniform-len: u32,
-    pad: u32,
+    /// Asset id of the mesh to draw, or `u32::MAX` for none.
+    mesh: u32,
+    /// Asset id of the texture to bind, or `u32::MAX` for none.
+    texture: u32,
     clear-r: f32, clear-g: f32, clear-b: f32, clear-a: f32,
   }
 

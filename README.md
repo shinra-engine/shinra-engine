@@ -196,11 +196,11 @@ static WGSL: [u8; include_bytes!("solid/shader.wgsl").len()] = *include_bytes!("
 pub extern "C" fn record() -> u32 {
     unsafe {
         let cmds = arena::COMMANDS as *mut Command;
-        *cmds.add(0) = Command { kind: BEGIN_PASS, ..BLANK };
-        *cmds.add(1) = Command { kind: DRAW_INSTANCED, vertices: 12,
+        *cmds.add(0) = Command { kind: render::BEGIN_PASS, ..render::BLANK };
+        *cmds.add(1) = Command { kind: render::DRAW_INSTANCED, vertices: 12,
             column: arena::COL_TRANSFORM, count: se_pool(arena::POOL_BODIES).len,
-            uniform_off: arena::CAMERA, uniform_len: Camera::SIZE, ..BLANK };
-        *cmds.add(2) = Command { kind: END_PASS, ..BLANK };
+            uniform_off: arena::CAMERA, uniform_len: Camera::SIZE, ..render::BLANK };
+        *cmds.add(2) = Command { kind: render::END_PASS, ..render::BLANK };
         let f = &mut *(arena::FRAME as *mut Frame);
         f.commands = arena::COMMANDS; f.count = 3;
         3

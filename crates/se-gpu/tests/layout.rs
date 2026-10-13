@@ -50,12 +50,12 @@ fn a_renamed_field_is_refused_by_name() -> Result<()> {
 }
 
 #[test]
-fn a_dropped_pad_changes_the_size() -> Result<()> {
+fn a_dropped_field_changes_the_size() -> Result<()> {
     refused(|m| {
         let r = rec(m, "command");
-        r.fields.retain(|f| f.name != "pad");
-        r.size = 44;
-    }, "reads 48")
+        r.fields.retain(|f| f.name != "mesh");
+        r.size = 48;
+    }, "reads 52")
 }
 
 #[test]

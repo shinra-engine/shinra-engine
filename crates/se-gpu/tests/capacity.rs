@@ -26,6 +26,8 @@ fn cmd(kind: u32, column: u32, count: u32, uniform_len: u32) -> Command {
         count,
         uniform_off: 0,
         uniform_len,
+        mesh: u32::MAX,
+        texture: u32::MAX,
         clear: [0.0, 0.0, 0.0, 1.0],
     }
 }
