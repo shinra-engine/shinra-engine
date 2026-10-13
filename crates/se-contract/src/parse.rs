@@ -133,16 +133,34 @@ fn resolve_member(resolve: &Resolve, t: &Type) -> Result<String> {
         .context("a pool member has no name")
 }
 
+/// The package every contract builds on, pushed before the game's own so a
+/// game can `use shinra:engine/types`.
+const ENGINE_WIT: &str = include_str!("engine.wit");
+
 pub fn parse(path: &Path) -> Result<Contract> {
     let mut resolve = Resolve::default();
+    let engine = resolve
+        .push_str("engine.wit", ENGINE_WIT)
+        .context("reading the shinra:engine package")?;
     let (pkg, _) = resolve
         .push_path(path)
         .with_context(|| format!("reading {}", path.display()))?;
 
+    for name in resolve.packages[pkg].interfaces.keys() {
+        if matches!(name.as_str(), "types" | "handles" | "render") {
+            bail!(
+                "`interface {name}` belongs to `shinra:engine`; a game declares only \
+                 components, pools and control"
+            );
+        }
+    }
+
     let mut records = Vec::new();
     let mut pools = Vec::new();
 
-    for (iname, iid) in &resolve.packages[pkg].interfaces {
+    let from_engine = resolve.packages[engine].interfaces.iter().map(|x| (x, true));
+    let from_game = resolve.packages[pkg].interfaces.iter().map(|x| (x, false));
+    for ((iname, iid), is_engine) in from_engine.chain(from_game) {
         // vec2/vec3/vec4 are primitives to this compiler, not records it emits.
         if iname == "types" {
             continue;
@@ -176,6 +194,12 @@ pub fn parse(path: &Path) -> Result<Contract> {
                 let ty = resolve_ty(&resolve, &f.ty)
                     .with_context(|| format!("`{tname}.{}`", f.name))?;
                 fields.push((f.name.clone(), ty));
+            }
+            if !is_engine && records.iter().any(|r: &Record| r.iface == *iname && r.name == *tname) {
+                bail!(
+                    "record `{iname}.{tname}` is declared by `shinra:engine`; a game \
+                     cannot redeclare it"
+                );
             }
             records.push(lay_out(tname, iname, &fields));
         }

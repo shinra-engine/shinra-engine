@@ -1,0 +1,67 @@
+// The part of the spec the engine itself reads and writes. A game's
+// contract.wit never restates it: `se-contract` pushes this package before
+// the game's, so a game reaches the vector types with
+// `use shinra:engine/types.{vec3};` and declares only its own components,
+// pools and control vars.
+package shinra:engine;
+
+/// The vector types WGSL has. Named, so each can be given the alignment WGSL
+/// demands — `vec3` aligns to 16 while its size stays 12, and that one
+/// asymmetry is why the layout is generated rather than written by hand.
+interface types {
+  record vec2 { x: f32, y: f32 }
+  record vec3 { x: f32, y: f32, z: f32 }
+  record vec4 { x: f32, y: f32, z: f32, w: f32 }
+}
+
+/// Fixed-size references to things that are not fixed size. A 2-triangle quad
+/// and a 5000-triangle teapot are the same eight bytes here.
+interface handles {
+  /// A run of host-owned bytes.
+  record span   { off: u32, len: u32 }
+  /// Where the host currently has a column. Read every frame rather than
+  /// baked, so a column can be grown or moved with no module rebuilt.
+  record column { base: u32, cap: u32, stride: u32, pool: u32 }
+  /// The length the columns of one pool share.
+  record pool   { len: u32, cap: u32 }
+}
+
+/// Written by the host before every tick; read by every module.
+interface control {
+  /// Time and intent. `dt` is here rather than a stage argument because a
+  /// stage takes no arguments: everything it reads is in the arena.
+  record clock { t: f32, dt: f32, frame: u32, swipe: s32 }
+
+  /// The keyboard. Three bitmasks rather than a byte per key, because a
+  /// contract record carries no arrays.
+  ///
+  ///   bit 0..25  a..z      bit 26  space     bit 27  enter
+  ///   bit 28/29  left/right          bit 30/31  up/down
+  record input {
+    down: u32,
+    pressed: u32,
+    released: u32,
+    mouse-x: f32,
+    mouse-y: f32,
+    mouse-down: u32,
+  }
+}
+
+/// render.wasm records; the host replays. Fixed-size commands, so the host
+/// walks the list with a stride and needs no decoder.
+interface render {
+  record command {
+    kind: u32,
+    /// Vertices the shader builds per instance.
+    vertices: u32,
+    shader: u32,
+    column: u32,
+    count: u32,
+    uniform-off: u32,
+    uniform-len: u32,
+    pad: u32,
+    clear-r: f32, clear-g: f32, clear-b: f32, clear-a: f32,
+  }
+
+  record frame { commands: u32, count: u32, present: u32, epoch: u32 }
+}

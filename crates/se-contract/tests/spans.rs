@@ -11,16 +11,15 @@ fn wit(name: &str) -> PathBuf {
 }
 
 /// spans.wit with `extra` spliced in as one more control record.
-fn with_extra(extra: &str, keep_span: bool) -> PathBuf {
+fn with_extra(extra: &str) -> PathBuf {
     let mut s = std::fs::read_to_string(wit("spans.wit")).unwrap();
     s = s.replace("  record intent", &format!("  {extra}\n  record intent"));
-    if keep_span {
-        s = s.replace("  use types.{vec3};\n", "  use types.{vec3};\n  use handles.{span};\n");
-    } else {
-        s = s.replace("  record span { off: u32, len: u32 }\n", "");
-    }
+    s = s.replace(
+        "  use shinra:engine/types.{vec3};\n",
+        "  use shinra:engine/types.{vec3};\n  use shinra:engine/handles.{span};\n",
+    );
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
-    let p = dir.join(format!("spans_{:x}.wit", extra.len() * 31 + keep_span as usize));
+    let p = dir.join(format!("spans_{:x}.wit", extra.len()));
     std::fs::write(&p, s).unwrap();
     p
 }
@@ -40,19 +39,17 @@ fn layout() {
 
 #[test]
 fn refuses() {
-    let e = se_contract::generate(&with_extra("record bad { x: list<list<u32>> }", true))
+    let e = se_contract::generate(&with_extra("record bad { x: list<list<u32>> }"))
         .err().expect("refused");
     assert!(format!("{e:#}").contains("list"), "{e:#}");
-    let e = se_contract::generate(&with_extra("record bad { x: list<string> }", true))
+    let e = se_contract::generate(&with_extra("record bad { x: list<string> }"))
         .err().expect("refused");
     assert!(format!("{e:#}").contains("list"), "{e:#}");
-    let e = se_contract::generate(&with_extra("record ok { x: u32 }", false)).err().expect("refused");
-    assert!(format!("{e:#}").contains("handles"), "{e:#}");
 }
 
 #[test]
 fn span_field_and_table() {
-    let g = se_contract::generate(&with_extra("record held { s: span }", true))
+    let g = se_contract::generate(&with_extra("record held { s: span }"))
         .expect("an explicit span field is accepted");
     let held = g.contract.records.iter().find(|r| r.name == "held").unwrap();
     assert_eq!(held.fields[0].ty, Ty::Span);

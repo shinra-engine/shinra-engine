@@ -5,10 +5,6 @@ use std::path::PathBuf;
 
 const WIT: &str = r#"package shinra:naming@0.1.0;
 
-interface types {
-  record vec3 { x: f32, y: f32, z: f32 }
-}
-
 interface components {
   record on-ground { v: u32 }
   record sprite { x: f32 }

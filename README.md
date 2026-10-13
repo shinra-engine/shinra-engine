@@ -69,7 +69,7 @@ replaced between any two frames.
 package shinra:game1@0.1.0;
 
 interface components {          // per-row data; a stage writes one only via &mut
-  use types.{vec3, vec4};
+  use shinra:engine/types.{vec3, vec4};
   record transform { pos: vec3, rot: vec4, scale: vec3, kind: u32 }
   record orbit { center: vec3, radius: f32, speed: f32, phase: f32, tilt: f32 }
 }
@@ -86,6 +86,10 @@ interface control {             // the whole write surface of game.wasm
                  mouse-x: f32, mouse-y: f32, mouse-down: u32 }
 }
 ```
+
+The engine's own records — `types`, `handles`, `clock`, `input`, `command`, `frame` —
+are a second package, `shinra:engine`, injected by `se-contract`; a game never restates
+them and one that tries is refused.
 
 WIT says *what* a field is. WGSL says *where* it sits: every layout is std430,
 because the GPU reads these records too (`vec3` aligns to 16 but stays 12 bytes

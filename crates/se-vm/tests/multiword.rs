@@ -6,12 +6,6 @@ use se_vm::Vm;
 
 const WIT: &str = r#"package shinra:multiword@0.1.0;
 
-interface handles {
-  record span { off: u32, len: u32 }
-  record column { base: u32, cap: u32, stride: u32, pool: u32 }
-  record pool { len: u32, cap: u32 }
-}
-
 interface components {
   record transform { x: f32, y: f32 }
   record on-ground { height: f32, grounded: u32 }
@@ -24,15 +18,6 @@ interface pools {
 
 interface control {
   record look { asset: u32, graph: u32, bodies: u32 }
-}
-
-interface render {
-  record command {
-    kind: u32, vertices: u32, shader: u32, column: u32, count: u32,
-    uniform-off: u32, uniform-len: u32, pad: u32,
-    clear-r: f32, clear-g: f32, clear-b: f32, clear-a: f32,
-  }
-  record frame { commands: u32, count: u32, present: u32, epoch: u32 }
 }
 "#;
 
