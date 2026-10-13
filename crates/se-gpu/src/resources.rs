@@ -22,19 +22,15 @@ pub enum Resource {
     Texture(ImageData),
 }
 
-#[allow(dead_code)]
 pub(crate) struct GpuMesh {
     pub buffer: wgpu::Buffer,
     pub vertices: u32,
 }
 
-#[allow(dead_code)]
 pub(crate) struct GpuTexture {
     pub view: wgpu::TextureView,
 }
 
-// Read by the replayer in the next tickets.
-#[allow(dead_code)]
 pub(crate) enum Loaded {
     Mesh(GpuMesh),
     Texture(GpuTexture),

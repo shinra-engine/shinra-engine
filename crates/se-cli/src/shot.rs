@@ -47,23 +47,6 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
         eprintln!("  stages: {}", names.join(", "));
     }
 
-    // Assets are data: their bytes ride in a custom section and never need
-    // instantiating. Each lands in a blob slot, and a record names it with a
-    // `span` — which is why a 12-byte mesh and an 800-byte one cost the same
-    // row.
-    for (i, name) in src.asset_ids().iter().enumerate() {
-        let path = out.join("asset").join(format!("{name}.wasm"));
-        let bytes = std::fs::read(&path)?;
-        vm.check_contract(&format!("asset/{name}"), &bytes)?;
-        match se_contract::wasm::section(&bytes, "se.asset") {
-            Ok(payload) => {
-                let (at, len) = vm.put_blob(i as u32, payload)?;
-                eprintln!("  asset {name}: slot {i} -> 0x{at:08x} +{len}");
-            }
-            Err(_) => eprintln!("  asset {name}: no se.asset section, skipped"),
-        }
-    }
-
     // One frame first, so the module can say what it wants drawn.
     let (rows, n) = vm.frame(0)?;
     for o in vm.take_overruns() {
@@ -90,6 +73,7 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let (w, h) = a.size;
     let mut gpu = Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), w, h)?;
     eprintln!("  adapter: {}", gpu.adapter());
+    crate::live::load_assets(&mut vm, &mut gpu, src, out, &mut |l| eprintln!("  {l}"))?;
 
     let mut start = 0u32;
     if let Some(file) = &a.load {

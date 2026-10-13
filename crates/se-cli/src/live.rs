@@ -70,20 +70,49 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
         log.push(format!("stages: {}", n.join(", ")));
     }
 
-    // Assets are data: the bytes ride in a custom section and never need
-    // instantiating. A row names one with a `span`, so swapping a 12-byte mesh
-    // for an 800-byte one changes two u32s and no layout.
-    for (i, name) in src.asset_ids().iter().enumerate() {
-        let bytes = std::fs::read(out.join("asset").join(format!("{name}.wasm")))?;
-        vm.check_contract(&format!("asset/{name}"), &bytes)?;
-        if let Ok(payload) = se_contract::wasm::section(&bytes, "se.asset") {
-            vm.put_blob(i as u32, payload)?;
-            log.push(format!("asset {name}: slot {i}, {} B", payload.len()));
-        }
-    }
-
     let (rname, rpath) = pick(src, &out, "render", opt.render.as_deref()).expect("checked");
     let gpu = make_gpu(&vm, &out, &std::fs::read(rpath)?, size)
         .with_context(|| format!("render/{rname}.wasm"))?;
+    let mut gpu = gpu;
+    load_assets(&mut vm, &mut gpu, src, &out, &mut |l| log.push(l))?;
     Ok(Live { vm, gpu })
+}
+
+/// Hand one asset module's payload to where its kind lives: meshes and images
+/// to the GPU, anything else into the arena as a blob. Both are keyed by id.
+pub fn load_asset(vm: &mut Vm, gpu: &mut Gpu, id: u32, name: &str, wasm: &Path) -> Result<String> {
+    let bytes = std::fs::read(wasm)?;
+    vm.check_contract(&format!("asset/{name}"), &bytes)?;
+    let payload = se_contract::wasm::section(&bytes, "se.asset")
+        .with_context(|| format!("asset/{name} carries no se.asset section"))?;
+    let kind = se_contract::wasm::section(&bytes, "se.asset.kind")
+        .ok()
+        .and_then(|k| std::str::from_utf8(k).ok())
+        .unwrap_or("");
+    let n = payload.len();
+    Ok(match se_gpu::resources::decode(kind, payload).with_context(|| format!("asset/{name}"))? {
+        Some(r) => {
+            gpu.set_resource(id, r);
+            format!("asset {name}: slot {id}, {kind} (gpu), {n} B")
+        }
+        None => {
+            vm.put_blob(id, payload)?;
+            format!("asset {name}: slot {id}, {kind}, {n} B")
+        }
+    })
+}
+
+/// Every asset of the game, by id (its place among the sorted names).
+pub fn load_assets(
+    vm: &mut Vm,
+    gpu: &mut Gpu,
+    src: &GameSrc,
+    out: &Path,
+    log: &mut dyn FnMut(String),
+) -> Result<()> {
+    for (i, name) in src.asset_ids().iter().enumerate() {
+        let wasm = out.join("asset").join(format!("{name}.wasm"));
+        log(load_asset(vm, gpu, i as u32, name, &wasm)?);
+    }
+    Ok(())
 }

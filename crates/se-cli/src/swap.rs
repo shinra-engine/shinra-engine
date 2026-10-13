@@ -28,7 +28,10 @@ pub fn swap(live: &mut Live, src: &GameSrc, out: &Path, cat: &str, name: &str, s
         if slot == Slot::Game {
             return Ok(None);
         }
-        Ok(Some(make_gpu(&live.vm, out, &bytes, size)?))
+        let mut g = make_gpu(&live.vm, out, &bytes, size)?;
+        // A fresh Gpu holds no meshes or images; upload them again by id.
+        crate::live::load_assets(&mut live.vm, &mut g, src, out, &mut |_| {})?;
+        Ok(Some(g))
     });
     match gpu {
         Ok(Some(g)) => live.gpu = g,

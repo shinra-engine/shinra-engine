@@ -102,11 +102,8 @@ impl Reloader {
             "asset" => {
                 // The slot is the asset's id: its place among the sorted names.
                 let index = src.asset_ids().iter().position(|n| n == name).context("asset vanished")?;
-                let bytes = std::fs::read(wasm)?;
-                live.vm.check_contract(&format!("asset/{name}"), &bytes)?;
-                let payload = se_contract::wasm::section(&bytes, "se.asset")
-                    .with_context(|| format!("asset/{name} carries no se.asset section"))?;
-                live.vm.put_blob(index as u32, payload)?;
+                let Live { vm, gpu } = live;
+                crate::live::load_asset(vm, gpu, index as u32, name, wasm)?;
                 format!("asset/{name}")
             }
             _ => {

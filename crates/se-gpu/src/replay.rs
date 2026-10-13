@@ -6,6 +6,7 @@
 //! stage left them.
 
 use crate::command::{Command, NONE, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS};
+use crate::resources::Loaded;
 use crate::{Gpu, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
@@ -68,7 +69,6 @@ impl Gpu {
 
         // Uploads first: a render pass borrows the encoder, and a column is
         // read straight out of the arena. Each draw gets its own bytes.
-        // (`mesh` is ignored until the next ticket binds it.)
         let mut next = 0u64;
         let mut ranges: Vec<(u64, u64)> = Vec::new();
         for (k, d) in draws.iter().enumerate() {
@@ -107,11 +107,12 @@ impl Gpu {
                 range = (off, end);
                 report.draws += 1;
                 report.instances += d.count;
-                self.ensure_pipeline(meta, d.column, false)?;
+                self.ensure_pipeline(meta, d.column, d.mesh != NONE)?;
             } else {
                 self.ensure_pipeline(meta, NONE, false)?;
             }
             ranges.push(range);
+            self.check_assets(d)?;
             if d.uniform_len > UNIFORM_BYTES {
                 bail!(
                     "uniform of {} bytes exceeds the {UNIFORM_BYTES}-byte uniform slot",
@@ -128,28 +129,9 @@ impl Gpu {
         }
         report.pipelines = self.pipelines.len();
 
-        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.bind_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: &self.uniform,
-                        offset: 0,
-                        size: wgpu::BufferSize::new(UNIFORM_BYTES as u64),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&self.white),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
+        // One bind group per draw per frame: its texture differs. Cheap at
+        // this scale; cache by texture id if draws ever number in thousands.
+        let binds: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.bind_for(d)).collect();
 
         let mut enc = self.device.create_command_encoder(&Default::default());
         {
@@ -172,19 +154,30 @@ impl Gpu {
                 let slot = k as u32 * UNIFORM_BYTES;
                 match d.kind {
                     DRAW_INSTANCED => {
-                        pass.set_pipeline(&self.pipelines[&(d.column, false)]);
-                        pass.set_bind_group(0, &bind, &[slot]);
+                        let mesh = match self.resources.get(d.mesh as usize) {
+                            Some(Some(Loaded::Mesh(m))) => Some(m),
+                            _ => None,
+                        };
+                        pass.set_pipeline(&self.pipelines[&(d.column, mesh.is_some())]);
+                        pass.set_bind_group(0, &binds[k], &[slot]);
                         let (a, b) = ranges[k];
                         pass.set_vertex_buffer(0, self.instances.slice(a..b));
-                        // Three is the fullscreen-triangle default, for a
-                        // module that names no geometry of its own.
-                        pass.draw(0..d.vertices.max(3), 0..d.count);
+                        if let Some(m) = mesh {
+                            // The mesh's own vertex count; `command.vertices`
+                            // is ignored for a mesh draw.
+                            pass.set_vertex_buffer(1, m.buffer.slice(..));
+                            pass.draw(0..m.vertices, 0..d.count);
+                        } else {
+                            // Three is the fullscreen-triangle default, for a
+                            // module that names no geometry of its own.
+                            pass.draw(0..d.vertices.max(3), 0..d.count);
+                        }
                     }
                     // Three vertices and no buffer: the shader builds the
                     // triangle. Clears, blits and post are this.
                     DRAW_FULLSCREEN => {
                         pass.set_pipeline(&self.pipelines[&(NONE, false)]);
-                        pass.set_bind_group(0, &bind, &[slot]);
+                        pass.set_bind_group(0, &binds[k], &[slot]);
                         pass.draw(0..3, 0..1);
                     }
                     _ => {}
@@ -214,6 +207,49 @@ impl Gpu {
         );
         self.queue.submit([enc.finish()]);
         Ok(report)
+    }
+
+    /// A draw's `mesh` and `texture` must name resources of that kind.
+    fn check_assets(&self, d: &Command) -> Result<()> {
+        let kind = |id: u32| match self.resources.get(id as usize) {
+            Some(Some(Loaded::Mesh(_))) => "mesh",
+            Some(Some(Loaded::Texture(_))) => "texture",
+            _ => "absent",
+        };
+        if d.mesh != NONE && kind(d.mesh) != "mesh" {
+            bail!("draw names asset {} as a mesh but it is {}", d.mesh, kind(d.mesh))
+        }
+        if d.texture != NONE && kind(d.texture) != "texture" {
+            bail!("draw names asset {} as a texture but it is {}", d.texture, kind(d.texture))
+        }
+        Ok(())
+    }
+
+    /// Uniform, the draw's texture (or white) and the sampler.
+    fn bind_for(&self, d: &Command) -> wgpu::BindGroup {
+        let view = match self.resources.get(d.texture as usize) {
+            Some(Some(Loaded::Texture(t))) if d.texture != NONE => &t.view,
+            _ => &self.white,
+        };
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniform,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(UNIFORM_BYTES as u64),
+                    }),
+                },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        })
     }
 
     /// The rendered image, RGBA8. Offscreen for now — a window is the same
