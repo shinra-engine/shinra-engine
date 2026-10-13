@@ -79,6 +79,7 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
     if let Some(cat) = src.category("asset") {
         for (i, m) in cat.modules.iter().enumerate() {
             let bytes = std::fs::read(out.join("asset").join(format!("{}.wasm", m.name)))?;
+            vm.check_contract(&format!("asset/{}", m.name), &bytes)?;
             if let Ok(payload) = se_contract::wasm::section(&bytes, "se.asset") {
                 vm.put_blob(i as u32, payload)?;
                 log.push(format!("asset {}: slot {i}, {} B", m.name, payload.len()));

@@ -103,6 +103,7 @@ impl Reloader {
                 // The slot is the module's position, as `live::open` put it.
                 let index = cat.modules.iter().position(|m| &m.name == name).context("asset vanished")?;
                 let bytes = std::fs::read(wasm)?;
+                live.vm.check_contract(&format!("asset/{name}"), &bytes)?;
                 let payload = se_contract::wasm::section(&bytes, "se.asset")
                     .with_context(|| format!("asset/{name} carries no se.asset section"))?;
                 live.vm.put_blob(index as u32, payload)?;

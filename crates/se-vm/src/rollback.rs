@@ -59,7 +59,7 @@ impl Vm {
         let mut slots = Vec::new();
         for s in std::mem::take(&mut self.staged) {
             let Staged { slot, prev, prev_stages } = s;
-            let back = Loaded::prepare(&self.engine, slot, &prev.name, prev.bytes)
+            let back = Loaded::prepare(&self.engine, slot, &prev.name, prev.bytes, self.contract_id())
                 .and_then(|p| Loaded::commit(p, &mut self.store, self.memory));
             match back {
                 Ok(m) => {

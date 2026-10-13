@@ -17,7 +17,7 @@
 use crate::clock;
 use crate::input::{self, Keys};
 use crate::memory::{required_pages, Slot};
-use crate::module::{with_budget, Loaded};
+use crate::module::{self, with_budget, Loaded};
 use crate::rollback::Staged;
 use crate::save;
 use crate::stages::{self, Stage};
@@ -84,31 +84,35 @@ impl Vm {
         })
     }
 
+    /// The fingerprint of the contract this world was placed from.
+    pub fn contract_id(&self) -> u64 { self.contract_id }
+
+    /// Refuse bytes built against another contract (for assets, never loaded).
+    pub fn check_contract(&self, name: &str, bytes: &[u8]) -> Result<()> {
+        module::check_contract_id(name, bytes, self.contract_id)
+    }
+
     /// Put a module in a slot, replacing whatever was there.
     ///
     /// Replacing is the whole point and costs nothing here: the new module's
     /// statics land on the same `--global-base` as the old one's, and the
     /// world is not in either of them.
     pub fn load(&mut self, slot: Slot, name: &str, bytes: Vec<u8>) -> Result<()> {
-        let p = Loaded::prepare(&self.engine, slot, name, bytes)?;
+        let p = Loaded::prepare(&self.engine, slot, name, bytes, self.contract_id)?;
         if slot != Slot::Process {
             let m = Loaded::commit(p, &mut self.store, self.memory)?;
             let prev = self.slot_mut(slot).replace(m);
             self.stage(slot, prev, Vec::new());
             return Ok(());
         }
-        // Discovered, never listed. The host knows no stage by name; it reads
-        // what the module declared and checks it against the contract, which
-        // is what lets a stage written long after this host was built still
-        // load. All of it is read from the file, before instantiation: a
-        // refusal after `commit` would already have written the module's
-        // statics over the running one's.
+        // Discovered, never listed: the host reads what the module declared
+        // and checks it against the contract, so a stage written after this
+        // host was built still loads. All of it is read before instantiation;
+        // a refusal after `commit` would have overwritten the running statics.
         let mut declared = match p.section(stages::SECTION) {
             Ok(bytes) => stages::decode(bytes)
                 .with_context(|| format!("the stage table in `{}`", p.name))?,
-            // A module with no table has no stages. That is the right answer
-            // for a control module or an asset, so it is not an error here
-            // either.
+            // No table, no stages: right for a control module or an asset.
             Err(_) => Vec::new(),
         };
         stages::resolve(&mut declared, &self.meta)?;

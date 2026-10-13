@@ -79,6 +79,7 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
         for (i, m) in cat.modules.iter().enumerate() {
             let path = out.join("asset").join(format!("{}.wasm", m.name));
             let bytes = std::fs::read(&path)?;
+            vm.check_contract(&format!("asset/{}", m.name), &bytes)?;
             match se_contract::wasm::section(&bytes, "se.asset") {
                 Ok(payload) => {
                     let (at, len) = vm.put_blob(i as u32, payload)?;

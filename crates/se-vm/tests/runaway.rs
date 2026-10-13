@@ -141,7 +141,13 @@ fn a_looping_start_function_fails_the_load() -> Result<()> {
     require_wasm_target();
     let contract = contract(&scratch("runaway-start"))?;
     let mut vm = Vm::new(&contract, 16)?;
-    let err = chain(&vm.load(Slot::Game, "loop", SPINNING_START.to_vec()).unwrap_err());
+    // A custom section carrying this world's contract id, appended to the file.
+    let mut bytes = SPINNING_START.to_vec();
+    let name = se_contract::table::CONTRACT_ID_SECTION;
+    bytes.extend([0x00, (1 + name.len() + 8) as u8, name.len() as u8]);
+    bytes.extend(name.as_bytes());
+    bytes.extend(vm.contract_id().to_le_bytes());
+    let err = chain(&vm.load(Slot::Game, "loop", bytes).unwrap_err());
     assert!(err.contains("instantiat") && err.contains("budget"), "{err}");
     Ok(())
 }

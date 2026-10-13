@@ -122,6 +122,8 @@ trusts:
 - **Statics by kind, not load order.** `--global-base` puts C at `0x800000`, D at
   `0xC00000`, V and M at `0x1000000`, so a replacement lands exactly where its
   predecessor was. A swap is re-instantiation, not relocation.
+- **Every module carries the contract's fingerprint.** One built against another
+  contract (or by hand, with none) is refused before it touches memory.
 - **Checked before it touches memory.** A module is compiled and checked —
   imports, its entry export, D's stages against the contract — before it is
   instantiated, so a refusal changes nothing.
