@@ -10,26 +10,24 @@ use se_vm::world::Meta;
 use se_vm::Vm;
 use std::path::PathBuf;
 
-fn game1() -> Result<String> {
+/// The shipped contract's meta, with the render records drifted by `drift`.
+/// `render.*` now comes from the `shinra:engine` package, which a game cannot
+/// edit, so the drift is applied to the decoded table instead.
+fn meta_with(drift: impl FnOnce(&mut Meta)) -> Result<Meta> {
     let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
-    Ok(std::fs::read_to_string(wit)?)
+    let g = se_contract::generate(&wit)?;
+    let mut meta = Vm::new(&g.module, 8)?.meta;
+    drift(&mut meta);
+    Ok(meta)
 }
 
-/// `game1.wit` with `from` replaced by `to`, generated from a temp dir.
-fn meta_with(name: &str, from: &str, to: &str) -> Result<Meta> {
-    let src = game1()?;
-    assert!(src.contains(from), "game1.wit no longer contains `{from}`");
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("layout-{name}"));
-    std::fs::create_dir_all(&dir)?;
-    let wit = dir.join("game.wit");
-    std::fs::write(&wit, src.replacen(from, to, 1))?;
-    let g = se_contract::generate(&wit)?;
-    Ok(Vm::new(&g.module, 8)?.meta)
+fn rec<'a>(m: &'a mut Meta, name: &str) -> &'a mut se_contract::read::RecordInfo {
+    m.all.iter_mut().find(|r| r.name == name).expect("record")
 }
 
 /// Both guards must refuse with a message containing `want`.
-fn refused(name: &str, from: &str, to: &str, want: &str) -> Result<()> {
-    let meta = meta_with(name, from, to)?;
+fn refused(drift: impl FnOnce(&mut Meta), want: &str) -> Result<()> {
+    let meta = meta_with(drift)?;
     let e = command::check_layout(&meta).expect_err("check_layout accepted a drifted contract");
     assert!(e.to_string().contains(want), "check_layout: {e}");
     let e = Gpu::new(&meta, "", 0, 8, 8).err().expect("Gpu::new accepted a drifted contract");
@@ -39,31 +37,41 @@ fn refused(name: &str, from: &str, to: &str, want: &str) -> Result<()> {
 
 #[test]
 fn the_shipped_contract_passes() -> Result<()> {
-    let meta = meta_with("none", "pad: u32,", "pad: u32,")?;
+    let meta = meta_with(|_| {})?;
     command::check_layout(&meta)
 }
 
 #[test]
 fn a_renamed_field_is_refused_by_name() -> Result<()> {
-    refused("rename", "uniform-off:", "uniform-offset:", "uniform_off")
+    refused(|m| {
+        let f = rec(m, "command").fields.iter_mut().find(|f| f.name == "uniform-off").unwrap();
+        f.name = "uniform-offset".into();
+    }, "uniform_off")
 }
 
 #[test]
 fn a_dropped_pad_changes_the_size() -> Result<()> {
-    refused("nopad", "    pad: u32,\n", "", "reads 48")
+    refused(|m| {
+        let r = rec(m, "command");
+        r.fields.retain(|f| f.name != "pad");
+        r.size = 44;
+    }, "reads 48")
 }
 
 #[test]
 fn swapped_fields_are_at_the_wrong_offsets() -> Result<()> {
-    refused("swap", "vertices: u32,\n    shader: u32,", "shader: u32,\n    vertices: u32,", "is at")
+    refused(|m| {
+        for f in rec(m, "command").fields.iter_mut() {
+            match f.name.as_str() {
+                "vertices" => f.offset = 8,
+                "shader" => f.offset = 4,
+                _ => {}
+            }
+        }
+    }, "is at")
 }
 
 #[test]
 fn a_missing_frame_record_is_refused() -> Result<()> {
-    refused(
-        "noframe",
-        "record frame { commands: u32, count: u32, present: u32, epoch: u32 }",
-        "",
-        "render.frame",
-    )
+    refused(|m| m.all.retain(|r| r.name != "frame"), "render.frame")
 }
