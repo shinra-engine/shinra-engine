@@ -46,6 +46,9 @@ const GAME: &str = r#"
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }
 include!("contract.rs");
+#[used]
+#[link_section = "se.contract-id"]
+pub static SE_CONTRACT_ID: [u8; 8] = CONTRACT_ID.to_le_bytes();
 
 /// Reads blob slot 0 as text and slot 1 as a list, and reports both through
 /// the `note` control var. No import: the span is read in place.

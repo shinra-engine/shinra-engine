@@ -78,5 +78,13 @@ fn multi_word_component_builds_and_stages() {
     let text = String::from_utf8_lossy(stages);
     assert!(text.contains("on-ground"), "stage table names the WIT component: {text:?}");
 
+    // Every module artifact carries the contract id its crate was built with.
+    let table = se_contract::wasm::section(&std::fs::read(out.join("contract.wasm")).unwrap(), se_contract::table::SECTION)
+        .expect("contract table")
+        .to_vec();
+    let id = se_contract::table::fingerprint(&table).to_le_bytes();
+    let got = se_contract::wasm::section(&wasm, se_contract::table::CONTRACT_ID_SECTION).expect("se.contract-id section");
+    assert_eq!(got, id);
+
     let _ = std::fs::remove_dir_all(&dir);
 }

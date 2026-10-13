@@ -24,11 +24,7 @@ pub struct Header {
     pub len: u32,
 }
 
-/// FNV-1a 64 over the contract table: two games share an id only if they share
-/// a contract.
-pub fn fingerprint(table: &[u8]) -> u64 {
-    table.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
-}
+pub use se_contract::table::fingerprint;
 
 pub fn encode(id: u64, frame: u32, base: u32, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(HEADER + payload.len());

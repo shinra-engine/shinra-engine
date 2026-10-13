@@ -44,6 +44,7 @@ fn prelude() -> &'static str {
      #[panic_handler]\n\
      fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n\
      include!(\"contract.rs\");\n\
+     #[used]\n#[link_section = \"se.contract-id\"]\npub static SE_CONTRACT_ID: [u8; 8] = CONTRACT_ID.to_le_bytes();\n\
      #[inline]\n\
      unsafe fn col(i: u32) -> Column { *((arena::COLUMNS + i * 16) as *const Column) }\n\
      #[inline]\n\

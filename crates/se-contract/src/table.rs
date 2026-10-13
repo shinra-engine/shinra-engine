@@ -20,6 +20,14 @@ use crate::parse::Contract;
 pub const MAGIC: &[u8; 4] = b"SHNR";
 pub const VERSION: u32 = 1;
 pub const SECTION: &str = "se.contract";
+/// The custom section every module carries: the 8 LE bytes of the contract id.
+pub const CONTRACT_ID_SECTION: &str = "se.contract-id";
+
+/// FNV-1a 64 over the contract table: two games share an id only if they share
+/// a contract.
+pub fn fingerprint(table: &[u8]) -> u64 {
+    table.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3))
+}
 
 /// Byte widths of the fixed-size rows. The encoder appends bytes and the
 /// reader indexes by these, so they are named once rather than divided by a

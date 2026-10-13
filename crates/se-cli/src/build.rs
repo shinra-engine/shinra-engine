@@ -127,6 +127,10 @@ fn root_for(members: &[&str], cat: &Category, contract_rs: &Path) -> String {
     s.push_str("#[panic_handler]\n");
     s.push_str("fn se_panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n");
     s.push_str(&format!("include!({:?});\n", abs(contract_rs)));
+    s.push_str(&format!(
+        "#[used]\n#[link_section = {:?}]\npub static SE_CONTRACT_ID: [u8; 8] = CONTRACT_ID.to_le_bytes();\n",
+        se_contract::table::CONTRACT_ID_SECTION
+    ));
     // Reaching a column is one load through the descriptor the host published,
     // never a baked address: that is what lets a column grow or move.
     s.push_str(

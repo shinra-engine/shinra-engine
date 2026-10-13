@@ -47,6 +47,7 @@ const PRELUDE: &str = concat!(
     "#[panic_handler]\n",
     "fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n",
     "include!(\"contract.rs\");\n",
+    "#[used]\n#[link_section = \"se.contract-id\"]\npub static SE_CONTRACT_ID: [u8; 8] = CONTRACT_ID.to_le_bytes();\n",
     "#[inline]\nunsafe fn col(i: u32) -> Column { *((arena::COLUMNS + i * 16) as *const Column) }\n",
     "#[inline]\nunsafe fn pool(i: u32) -> Pool { *((arena::POOLS + i * 8) as *const Pool) }\n",
     "#[inline]\nunsafe fn row<T>(c: &Column, i: u32) -> *mut T { (c.base + i * c.stride) as *mut T }\n",

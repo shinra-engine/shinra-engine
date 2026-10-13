@@ -211,7 +211,7 @@ impl Span {
 
 ";
 
-pub fn emit(c: &Contract, m: &Map) -> String {
+pub fn emit(c: &Contract, m: &Map, id: u64) -> String {
     let mut out = String::from(HEADER);
     out.push('\n');
     for r in &c.records {
@@ -221,6 +221,9 @@ pub fn emit(c: &Contract, m: &Map) -> String {
         out.push_str(SPAN_IMPL);
     }
     emit_arena(&mut out, c, m);
+    out.push_str(&format!(
+        "/// FNV-1a of the contract table; every module built from this file carries it.\npub const CONTRACT_ID: u64 = 0x{id:016x};\n"
+    ));
     emit_pools(&mut out, c);
     emit_vertex(&mut out, c);
     out

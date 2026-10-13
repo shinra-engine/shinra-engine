@@ -53,13 +53,17 @@ pub struct Generated {
     pub module: Vec<u8>,
     pub contract: parse::Contract,
     pub map: arena::Map,
+    /// Fingerprint of the contract table; every module built from it carries it.
+    pub id: u64,
 }
 
 pub fn generate(wit: &Path) -> Result<Generated> {
     let contract = parse::parse(wit)?;
     let map = arena::map(&contract);
-    let rust = emit_rust::emit(&contract, &map);
+    let table_bytes = table::encode(&contract, &map);
+    let id = table::fingerprint(&table_bytes);
+    let rust = emit_rust::emit(&contract, &map, id);
     let wgsl = emit_wgsl::emit(&contract)?;
-    let module = wasm::wrap(table::SECTION, &table::encode(&contract, &map));
-    Ok(Generated { rust, wgsl, module, contract, map })
+    let module = wasm::wrap(table::SECTION, &table_bytes);
+    Ok(Generated { rust, wgsl, module, contract, map, id })
 }

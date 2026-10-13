@@ -39,6 +39,7 @@ fn prelude() -> &'static str {
      #[panic_handler]\n\
      fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n\
      include!(\"contract.rs\");\n\
+     #[used]\n#[link_section = \"se.contract-id\"]\npub static SE_CONTRACT_ID: [u8; 8] = CONTRACT_ID.to_le_bytes();\n\
      #[inline]\n\
      unsafe fn pool(i: u32) -> Pool { *((arena::POOLS + i * 8) as *const Pool) }\n"
 }
