@@ -39,7 +39,7 @@ fn replay(rows: u32, count: u32, uniform_len: u32) -> Result<()> {
     let transform =
         g.contract.components().iter().position(|r| r.name == "transform").unwrap() as u32;
     let vm = Vm::new(&g.module, rows)?;
-    let gpu = Gpu::new(&vm.meta, &format!("{}\n{SHADER}", g.wgsl), transform, 32, 32)?;
+    let mut gpu = Gpu::new(&vm.meta, &format!("{}\n{SHADER}", g.wgsl), 32, 32)?;
     let cmds = [
         cmd(BEGIN_PASS, 0, 0, 0),
         cmd(DRAW_INSTANCED, transform, count, uniform_len),

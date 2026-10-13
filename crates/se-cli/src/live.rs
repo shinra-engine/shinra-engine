@@ -6,7 +6,7 @@ use crate::deck::Deck;
 use crate::discover::GameSrc;
 use crate::run::Options;
 use anyhow::{bail, Context, Result};
-use se_gpu::{command, Gpu};
+use se_gpu::Gpu;
 use se_vm::memory::Slot;
 use se_vm::Vm;
 use std::path::{Path, PathBuf};
@@ -19,9 +19,6 @@ const ROWS: u32 = 1024;
 pub struct Live {
     pub vm: Vm,
     pub gpu: Gpu,
-    /// The column the recorded frame draws, which is what the pipeline was
-    /// built for.
-    pub column: u32,
 }
 
 pub fn pick(src: &GameSrc, out: &Path, cat: &str, want: Option<&str>) -> Option<(String, PathBuf)> {
@@ -39,14 +36,14 @@ pub fn pick(src: &GameSrc, out: &Path, cat: &str, want: Option<&str>) -> Option<
     Some((m.name.clone(), out.join(cat).join(format!("{}.wasm", m.name))))
 }
 
-/// A pipeline from a render module's `se.wgsl` section, for the column it draws.
-pub fn make_gpu(vm: &Vm, out: &Path, render_bytes: &[u8], column: u32, size: (u32, u32)) -> Result<Gpu> {
+/// A Gpu from a render module's `se.wgsl` section.
+pub fn make_gpu(vm: &Vm, out: &Path, render_bytes: &[u8], size: (u32, u32)) -> Result<Gpu> {
     let wgsl = std::str::from_utf8(
         se_contract::wasm::section(render_bytes, "se.wgsl")
             .context("the render module carries no se.wgsl section")?,
     )?;
     let contract_wgsl = std::fs::read_to_string(out.join("contract.wgsl"))?;
-    Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), column, size.0, size.1)
+    Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), size.0, size.1)
 }
 
 /// Build whichever game the deck points at, stand it up, and make a pipeline
@@ -85,18 +82,8 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
         }
     }
 
-    // One frame first, so the module says what it wants drawn rather than the
-    // host deciding for it.
-    vm.frame(0)?;
-    let (cmds, _) = command::read(&vm.meta, vm.bytes())?;
-    let draw = cmds
-        .iter()
-        .find(|c| c.kind == command::DRAW_INSTANCED)
-        .context("the recorded frame has no instanced draw to build a pipeline for")?;
-    let column = draw.column;
-
     let (rname, rpath) = pick(src, &out, "render", opt.render.as_deref()).expect("checked");
-    let gpu = make_gpu(&vm, &out, &std::fs::read(rpath)?, column, size)
+    let gpu = make_gpu(&vm, &out, &std::fs::read(rpath)?, size)
         .with_context(|| format!("render/{rname}.wasm"))?;
-    Ok(Live { vm, gpu, column })
+    Ok(Live { vm, gpu })
 }

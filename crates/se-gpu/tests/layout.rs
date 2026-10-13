@@ -30,7 +30,7 @@ fn refused(drift: impl FnOnce(&mut Meta), want: &str) -> Result<()> {
     let meta = meta_with(drift)?;
     let e = command::check_layout(&meta).expect_err("check_layout accepted a drifted contract");
     assert!(e.to_string().contains(want), "check_layout: {e}");
-    let e = Gpu::new(&meta, "", 0, 8, 8).err().expect("Gpu::new accepted a drifted contract");
+    let e = Gpu::new(&meta, "", 8, 8).err().expect("Gpu::new accepted a drifted contract");
     assert!(e.to_string().contains(want), "Gpu::new: {e}");
     Ok(())
 }

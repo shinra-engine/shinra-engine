@@ -5,8 +5,8 @@
 //! WebGPU call it names, and to hand the GPU the column bytes exactly as the
 //! stage left them.
 
-use crate::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS};
-use crate::{Gpu, INSTANCE_CAP, UNIFORM_BYTES};
+use crate::command::{Command, NONE, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS};
+use crate::{Gpu, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
 
@@ -18,6 +18,8 @@ pub struct Report {
     pub draws: usize,
     pub instances: u32,
     pub clear: [f32; 4],
+    /// Pipelines this `Gpu` has built so far.
+    pub pipelines: usize,
 }
 
 fn u32_at(m: &[u8], at: u32) -> u32 {
@@ -29,7 +31,7 @@ impl Gpu {
     /// Replay one recorded frame. `mem` is the shared linear memory — the
     /// world as it stands, not a copy of it.
     pub fn replay(
-        &self,
+        &mut self,
         meta: &Meta,
         world: &World,
         mem: &[u8],
@@ -60,23 +62,18 @@ impl Gpu {
             bail!("the recorded frame opens no pass")
         }
 
+        if draws.len() > UNIFORM_SLOTS as usize {
+            bail!("frame has {} draws but only {UNIFORM_SLOTS} uniform slots", draws.len())
+        }
+
         // Uploads first: a render pass borrows the encoder, and a column is
-        // read straight out of the arena.
-        for d in &draws {
+        // read straight out of the arena. Each draw gets its own bytes.
+        // (`mesh` is ignored until the next ticket binds it.)
+        let mut next = 0u64;
+        let mut ranges: Vec<(u64, u64)> = Vec::new();
+        for (k, d) in draws.iter().enumerate() {
+            let mut range = (0u64, 0u64);
             if d.kind == DRAW_INSTANCED {
-                if d.column != self.instance_column {
-                    bail!(
-                        "the pipeline was built for column {} but the frame draws column {}",
-                        self.instance_column,
-                        d.column
-                    )
-                }
-                if d.count > INSTANCE_CAP {
-                    bail!(
-                        "draw of {} instances exceeds the {INSTANCE_CAP} the instance buffer holds",
-                        d.count
-                    )
-                }
                 let pool = world.pool_of.get(d.column as usize).copied().unwrap_or(u32::MAX);
                 if let Some(cap) = world.pool_cap.get(pool as usize).copied() {
                     if d.count > cap {
@@ -91,18 +88,33 @@ impl Gpu {
                 let base = u32_at(mem, desc) as usize;
                 let stride = u32_at(mem, desc + 8) as usize;
                 let len = stride * d.count as usize;
+                let off = next;
+                let end = off + len as u64;
+                if end > INSTANCE_BYTES as u64 {
+                    bail!(
+                        "the frame's instances need {end} bytes but the instance buffer holds {INSTANCE_BYTES}"
+                    )
+                }
                 let bytes = mem
                     .get(base..base + len)
                     .context("the column a draw names runs past the memory")?;
                 // The entire conversion from world to GPU. std430 offsets in,
                 // std430 offsets out.
-                self.queue.write_buffer(&self.instances, 0, bytes);
+                if len > 0 {
+                    self.queue.write_buffer(&self.instances, off, bytes);
+                }
+                next = end.div_ceil(4) * 4;
+                range = (off, end);
                 report.draws += 1;
                 report.instances += d.count;
+                self.ensure_pipeline(meta, d.column, false)?;
+            } else {
+                self.ensure_pipeline(meta, NONE, false)?;
             }
+            ranges.push(range);
             if d.uniform_len > UNIFORM_BYTES {
                 bail!(
-                    "uniform of {} bytes exceeds the {UNIFORM_BYTES}-byte uniform buffer",
+                    "uniform of {} bytes exceeds the {UNIFORM_BYTES}-byte uniform slot",
                     d.uniform_len
                 )
             }
@@ -111,15 +123,23 @@ impl Gpu {
                 let bytes = mem
                     .get(u..u + d.uniform_len as usize)
                     .context("the uniform a draw names runs past the memory")?;
-                self.queue.write_buffer(&self.uniform, 0, bytes);
+                self.queue.write_buffer(&self.uniform, (k as u32 * UNIFORM_BYTES) as u64, bytes);
             }
         }
+        report.pipelines = self.pipelines.len();
 
         let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.bind_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniform.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniform,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(UNIFORM_BYTES as u64),
+                    }),
+                },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(&self.white),
@@ -148,19 +168,25 @@ impl Gpu {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind, &[0]);
-            for d in &draws {
+            for (k, d) in draws.iter().enumerate() {
+                let slot = k as u32 * UNIFORM_BYTES;
                 match d.kind {
                     DRAW_INSTANCED => {
-                        pass.set_vertex_buffer(0, self.instances.slice(..));
+                        pass.set_pipeline(&self.pipelines[&(d.column, false)]);
+                        pass.set_bind_group(0, &bind, &[slot]);
+                        let (a, b) = ranges[k];
+                        pass.set_vertex_buffer(0, self.instances.slice(a..b));
                         // Three is the fullscreen-triangle default, for a
                         // module that names no geometry of its own.
                         pass.draw(0..d.vertices.max(3), 0..d.count);
                     }
                     // Three vertices and no buffer: the shader builds the
                     // triangle. Clears, blits and post are this.
-                    DRAW_FULLSCREEN => pass.draw(0..3, 0..1),
+                    DRAW_FULLSCREEN => {
+                        pass.set_pipeline(&self.pipelines[&(NONE, false)]);
+                        pass.set_bind_group(0, &bind, &[slot]);
+                        pass.draw(0..3, 0..1);
+                    }
                     _ => {}
                 }
             }

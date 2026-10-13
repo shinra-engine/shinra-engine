@@ -11,6 +11,7 @@
 //! reason the host does not compile a `contract.rs` in.
 
 pub mod command;
+mod pipeline;
 pub mod replay;
 pub mod resources;
 
@@ -18,8 +19,8 @@ pub use replay::Report;
 pub use resources::Resource;
 use resources::Loaded;
 
-use anyhow::{bail, Context, Result};
-use se_contract::layout::Ty;
+use anyhow::Result;
+use std::collections::HashMap;
 use se_vm::world::Meta;
 
 pub struct Target {
@@ -39,7 +40,10 @@ pub struct Gpu {
     pub queue: wgpu::Queue,
     pub adapter_name: String,
     target: Target,
-    pipeline: wgpu::RenderPipeline,
+    module: wgpu::ShaderModule,
+    pipe_layout: wgpu::PipelineLayout,
+    /// Keyed by (instance column, has-mesh); filled on first use.
+    pipelines: HashMap<(u32, bool), wgpu::RenderPipeline>,
     bind_layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     instances: wgpu::Buffer,
@@ -47,29 +51,16 @@ pub struct Gpu {
     sampler: wgpu::Sampler,
     /// 1x1 white, bound when a draw names no texture.
     white: wgpu::TextureView,
-    /// The column the pipeline's vertex layout was built for.
-    instance_column: u32,
 }
 
-/// Instances the instance buffer holds.
-pub const INSTANCE_CAP: u32 = 4096;
-/// Bytes the uniform buffer holds.
+/// Bytes the instance buffer holds, shared by every draw of a frame.
+pub const INSTANCE_BYTES: u32 = 4096 * 64;
+/// Uniform slots a frame can use; one per draw.
+pub const UNIFORM_SLOTS: u32 = 64;
+/// Bytes per uniform slot (the dynamic-offset alignment).
 pub const UNIFORM_BYTES: u32 = 256;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
-
-fn vertex_format(ty: Ty) -> Result<wgpu::VertexFormat> {
-    Ok(match ty {
-        Ty::F32 => wgpu::VertexFormat::Float32,
-        Ty::Vec(2) => wgpu::VertexFormat::Float32x2,
-        Ty::Vec(3) => wgpu::VertexFormat::Float32x3,
-        Ty::Vec(4) => wgpu::VertexFormat::Float32x4,
-        Ty::I32 => wgpu::VertexFormat::Sint32,
-        Ty::U32 => wgpu::VertexFormat::Uint32,
-        Ty::Span => wgpu::VertexFormat::Uint32x2,
-        other => bail!("no vertex format for {other:?}"),
-    })
-}
 
 impl Gpu {
     /// `shader` is `contract.wgsl` followed by the module's own `se.wgsl`, so
@@ -77,7 +68,6 @@ impl Gpu {
     pub fn new(
         meta: &Meta,
         shader: &str,
-        instance_column: u32,
         width: u32,
         height: u32,
     ) -> Result<Gpu> {
@@ -95,25 +85,6 @@ impl Gpu {
             label: Some("contract.wgsl + se.wgsl"),
             source: wgpu::ShaderSource::Wgsl(shader.into()),
         });
-
-        // Built from the contract, not from a generated constant: the host
-        // must render a game whose contract it never compiled.
-        let rec = meta
-            .components
-            .get(instance_column as usize)
-            .with_context(|| format!("no component at column {instance_column}"))?;
-        let attrs: Vec<wgpu::VertexAttribute> = rec
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                Ok(wgpu::VertexAttribute {
-                    format: vertex_format(f.ty)?,
-                    offset: f.offset as u64,
-                    shader_location: i as u32,
-                })
-            })
-            .collect::<Result<_>>()?;
 
         let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -151,36 +122,6 @@ impl Gpu {
             bind_group_layouts: &[&bind_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: None,
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: rec.size as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &attrs,
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview: None,
-            cache: None,
-        });
-
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("present"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -201,13 +142,13 @@ impl Gpu {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniform"),
-            size: UNIFORM_BYTES as u64,
+            size: (UNIFORM_BYTES * UNIFORM_SLOTS) as u64,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let instances = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("a column, verbatim"),
-            size: (rec.size as u64) * INSTANCE_CAP as u64,
+            size: INSTANCE_BYTES as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -229,15 +170,33 @@ impl Gpu {
             queue,
             adapter_name,
             target: Target { width, height, row_bytes, texture, view, readback },
-            pipeline,
+            module,
+            pipe_layout: layout,
+            pipelines: HashMap::new(),
             bind_layout,
             uniform,
             instances,
             resources: Vec::new(),
             sampler,
             white,
-            instance_column,
         })
+    }
+
+    /// The pipeline for a draw of `column`, built on first use.
+    pub(crate) fn ensure_pipeline(&mut self, meta: &Meta, column: u32, with_mesh: bool) -> Result<()> {
+        if !self.pipelines.contains_key(&(column, with_mesh)) {
+            let p = pipeline::build(
+                &self.device,
+                &self.pipe_layout,
+                &self.module,
+                meta,
+                column,
+                with_mesh,
+                FORMAT,
+            )?;
+            self.pipelines.insert((column, with_mesh), p);
+        }
+        Ok(())
     }
 
     /// Register (or replace) the mesh or texture an asset id names.

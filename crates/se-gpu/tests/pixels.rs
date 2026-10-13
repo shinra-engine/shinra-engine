@@ -169,7 +169,6 @@ fn contract_wit_to_pixels() -> Result<()> {
 
     let comps = g.contract.components();
     let orbit = comps.iter().position(|r| r.name == "orbit").unwrap() as u32;
-    let transform = comps.iter().position(|r| r.name == "transform").unwrap() as u32;
 
     let game = build(&dir, "game", Slot::Game, &format!("{PRELUDE}{GAME}"))?;
     let process = build(
@@ -196,7 +195,7 @@ fn contract_wit_to_pixels() -> Result<()> {
         se_contract::wasm::section(&render, "se.wgsl").expect("se.wgsl"),
     )?
     .to_string();
-    let gpu = Gpu::new(&vm.meta, &format!("{}\n{wgsl}", g.wgsl), transform, W, H)?;
+    let mut gpu = Gpu::new(&vm.meta, &format!("{}\n{wgsl}", g.wgsl), W, H)?;
     eprintln!("adapter: {}", gpu.adapter());
 
     // Seed the column the host owns.

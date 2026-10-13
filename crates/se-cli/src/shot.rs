@@ -22,31 +22,7 @@ use se_gpu::{command, Gpu};
 use se_vm::memory::Slot;
 use se_vm::Vm;
 use std::io::Write;
-use std::path::{Path, PathBuf};
-
-/// Which artifact fills a slot. `process/` is additive, so its one module is
-/// named after the category; every other category is a choice between
-/// alternatives, and the name is the file's.
-fn pick(
-    src: &GameSrc,
-    out: &Path,
-    category: &str,
-    want: Option<&str>,
-) -> Option<(String, PathBuf)> {
-    let cat = src.category(category)?;
-    if crate::build::is_additive(category) {
-        if cat.modules.is_empty() {
-            return None;
-        }
-        let n: Vec<&str> = cat.modules.iter().map(|m| m.name.as_str()).collect();
-        return Some((n.join("+"), out.join(category).join(format!("{category}.wasm"))));
-    }
-    let m = match want {
-        Some(n) => cat.modules.iter().find(|m| m.name == n)?,
-        None => cat.modules.first()?,
-    };
-    Some((m.name.clone(), out.join(category).join(format!("{}.wasm", m.name))))
-}
+use std::path::Path;
 
 pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let built = build::build(src, out, &a.profile)?;
@@ -59,7 +35,7 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
         (Slot::Process, "process", a.process.as_deref()),
         (Slot::Render, "render", a.render.as_deref()),
     ] {
-        let Some((name, path)) = pick(src, out, category, want) else {
+        let Some((name, path)) = crate::live::pick(src, out, category, want) else {
             bail!("`{}` has no {category}/*.rs to fill the {category} slot", src.name)
         };
         vm.load(slot, &name, std::fs::read(&path)?)
@@ -93,21 +69,14 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     for o in vm.take_overruns() {
         eprintln!("  {o}");
     }
-    let (cmds, _) = command::read(&vm.meta, vm.bytes())?;
+    command::read(&vm.meta, vm.bytes())?;
     if n == 0 {
         bail!("render.wasm recorded no commands");
     }
-    let Some(draw) = cmds.iter().find(|c| c.kind == command::DRAW_INSTANCED) else {
-        bail!("the recorded frame has no instanced draw, so there is nothing to build a pipeline for")
-    };
-    let column = draw.column;
-    eprintln!(
-        "  frame 0: {rows} rows, {n} commands, drawing column {column} (`{}`)",
-        vm.meta.components[column as usize].name
-    );
+    eprintln!("  frame 0: {rows} rows, {n} commands");
 
     let render_bytes = {
-        let (name, path) = pick(src, out, "render", a.render.as_deref()).expect("checked above");
+        let (name, path) = crate::live::pick(src, out, "render", a.render.as_deref()).expect("checked above");
         let _ = name;
         std::fs::read(path)?
     };
@@ -119,7 +88,7 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let contract_wgsl = std::fs::read_to_string(out.join("contract.wgsl"))?;
 
     let (w, h) = a.size;
-    let gpu = Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), column, w, h)?;
+    let mut gpu = Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), w, h)?;
     eprintln!("  adapter: {}", gpu.adapter());
 
     let mut start = 0u32;
