@@ -1,118 +1,226 @@
 # Shinra Engine
 
-A game engine where every part of a game is a `.so` that can be replaced while
-the game is running.
+A game engine where every part of a game is a `.wasm` module that can be
+replaced while the game is running.
 
-The specification is [`design.md`](design.md). This file describes what is
-built.
+The design is called **MCDV** — like MVC, split along the lines a game actually
+changes along:
+
+| | Module | Is | Swap it and |
+|---|---|---|---|
+| **M** | `asset.wasm` | model — meshes, textures, text | the game is about something else |
+| **C** | `game.wasm` | control — input in, control vars out | the rules change |
+| **D** | `data.wasm` | data pipeline — stages over columns | the world behaves differently |
+| **V** | `render.wasm` | graphics pipeline — draw commands | the game looks different (2d, 3d, pixel art) |
+
+All four obey one shared spec, `contract.wit`. **A module knows the spec and
+nothing else.** It never knows which other modules are loaded or how they work —
+a `render.wasm` does not know whether the data pipeline integrates physics or
+replays a recording, only that `transform` is 48 bytes at a column the spec
+names. So **any wasm that follows the spec can be hot-replaced**, by one written
+by someone else, long after the engine was built. The world — every row, every
+control var — survives every swap, because the host owns it and the modules
+only read and write it.
+
+Change `contract.wit` and you have a different game, so everything restarts.
+That is the one line you cannot cross, and it is what makes the other four
+cheap. The feel this is for is *gametok*: swipe, and you are in another game.
+
+## The flow is a DAG
 
 ```
-             bundle.so
-         data.rs + buffer.rs
-        ↙        ↓       ↘
-   data ──►  game.so ──┬──►  process.so ────►  data
-  status     control   │         ecs          update
-                ↓      │
-            asset.so ──┴──►  render.so ───►  buffer ──►  show
-            appearance         graphs        targets
-
-  └──── imperative ────┘└───── pure ───────┘
+                        contract.wit
+              the shared spec: every byte's place
+                             │
+        ┌────────────────────┼──────────────────────┐
+        ▼                    ▼                      ▼
+   M  asset.wasm        C  game.wasm  ◄── input  (keyboard, mouse)
+      appearance           control
+        │                    │ control vars
+        │                    ▼
+        │               D  data.wasm
+        │                  data pipeline  ──►  columns (the world)
+        │                    │
+        └──────────┬─────────┘
+                   ▼
+              V  render.wasm  ──►  commands  ──►  host replays on the GPU  ──►  screen
+                 graphics
 ```
 
-Change `render.so` and the game looks different. Change `asset.so` and it is
-about something else. Change `game.so` and the rules change. The world — every
-entity, every component — survives all three, because the host owns it and the
-modules only describe it.
+One frame walks it in order, and nothing flows backwards:
 
-Change `bundle.so` and you have a different game set, so everything reloads.
-That is the one line you cannot cross without starting over, which is what
-makes the other three cheap.
+1. **C** `tick(frame)` reads `input` and writes the control var set — camera,
+   clock, how many rows each pool should have. Nothing else.
+2. The host clamps each pool's length to its capacity. That is the whole of
+   spawn and despawn: control asks for a roster by writing one number.
+3. **D** every stage runs over its pool's rows, reading control vars and
+   columns, writing columns.
+4. **V** `record()` writes a fixed-size command list; the host replays it with
+   wgpu. **M** never runs: the host reads its bytes and publishes them as blobs
+   that V draws and C may read.
+
+None of the calls takes data or returns data the host acts on. Everything is
+in the arena at addresses the contract fixed — which is why any module can be
+replaced between any two frames.
+
+## contract.wit — the shared spec
+
+```wit
+package shinra:game1@0.1.0;
+
+interface components {          // per-row data; a stage writes one only via &mut
+  use types.{vec3, vec4};
+  record transform { pos: vec3, rot: vec4, scale: vec3, kind: u32 }
+  record orbit { center: vec3, radius: f32, speed: f32, phase: f32, tilt: f32 }
+}
+
+interface pools {               // columns that share one length: row i is one body
+  use components.{transform, orbit};
+  record bodies { t: transform, o: orbit }
+}
+
+interface control {             // the whole write surface of game.wasm
+  record look  { asset: u32, graph: u32, bodies: u32 }
+  record clock { t: f32, dt: f32, frame: u32, swipe: s32 }
+  record input { down: u32, pressed: u32, released: u32,
+                 mouse-x: f32, mouse-y: f32, mouse-down: u32 }
+}
+```
+
+WIT says *what* a field is. WGSL says *where* it sits: every layout is std430,
+because the GPU reads these records too (`vec3` aligns to 16 but stays 12 bytes
+— the reason layouts are generated, never written). `shinra build` turns the one
+file into three, and nobody restates a layout:
+
+| Generated | Read by |
+|---|---|
+| `contract.rs` | every module — `#[repr(C)]` structs padded to std430, `arena::*` addresses |
+| `contract.wgsl` | every shader — prepended, so an instance input *is* the component |
+| `contract.wasm` | the host, at run time — so one engine binary runs any game |
+
+Field types are `f32`, `s32`, `u32`, `vec2/3/4`, and `string`/`list<T>`, which
+lower to an 8-byte `span` into the blob heap.
+
+## What makes hot replacement safe
+
+All modules share **one linear memory the host owns**. Swapping a module cannot
+disturb the world because the world is not in any module, and nothing is copied
+to hand it over. That only holds under rules the engine enforces rather than
+trusts:
+
+- **Import nothing but `env::memory`.** Every module's stack is the same
+  `[0, 64 KiB)`; sharing it is safe only while one module is ever on it, and a
+  module that cannot call out cannot be suspended inside another. The loader
+  refuses any other import, and any module exporting its own memory.
+- **The arena starts at the stack top** (`0x10000`), so a stack overflow traps
+  instead of silently eating the world.
+- **Statics by kind, not load order.** `--global-base` puts C at `0x800000`, D at
+  `0xC00000`, V and M at `0x1000000`, so a replacement lands exactly where its
+  predecessor was. A swap is re-instantiation, not relocation.
+- **Checked before it touches memory.** A module is compiled and checked —
+  imports, its entry export, D's stages against the contract — before it is
+  instantiated, so a refusal changes nothing.
+- **The next frame confirms.** A swap is pending until a frame succeeds; a
+  frame that traps re-instantiates the previous module from its bytes. Every
+  call into wasm runs on a fuel budget, so an infinite loop is cut off, named,
+  and rolled back. The world itself is not transactional.
 
 ## A game is a directory
 
-There is no manifest. The tree is the configuration, because a manifest could
-disagree with the tree.
-
-**A `.rs` at depth 1 is a module. Anything deeper is a source file inside one.**
+There is no manifest; the tree is the configuration. **A `.rs` at depth 1 is a
+module. A folder named after a sibling `.rs` is private to it; any other folder
+is shared across the category.**
 
 ```
 game1/
-├── bundle/  data.rs  buffer.rs          both required
-├── process/ orbit.rs  spin.rs  breathe.rs
-├── render/  solid.rs  ghost.rs  solid/shade.rs  wgsl/mod.rs
-├── asset/   bunny.rs  teapot.rs  bunny/model.obj
-└── game/    game1.rs  showcase.rs
+├── contract.wit                         the spec — required
+├── asset/    bunny.rs  teapot.rs  bunny/model.obj         M
+├── game/     game1.rs                                     C
+├── process/  orbit.rs  spin.rs  breathe.rs  math/mod.rs   D
+└── render/   solid.rs  ghost.rs  solid/shader.wgsl        V
 ```
 
-A folder named after a sibling `.rs` is private to it — `render/solid/` belongs
-to `solid.rs` alone. One without a sibling is shared across the category —
-`render/wgsl/`, reached as `crate::render::wgsl`.
-
-Each module is one `rustc` invocation. No `Cargo.toml`, no build script.
-
-## Six entry points
-
-| Module | Symbol | Registers |
-|---|---|---|
-| `bundle.so` | `se_register_layouts()` | name → layout (from `data.rs`) |
-| | `se_register_buffers()` | name → shape, count, sampled (from `buffer.rs`) |
-| `asset/*.so` | `se_register_assets()` | name → bytes |
-| `process/*.so` | `se_register_stages()` | spec + function |
-| `render/*.so` | `se_register_graph()` | nodes + edges |
-| `game/*.so` | `se_register_control()` | slots + tick |
-
-Every module also exports `se_abi_version`, checked before anything else in
-the image is trusted.
+`process/` is additive: every stage in it builds into one data module.
+`asset/`, `game/` and `render/` are choices: one module per file, one loaded at
+a time. Each module is one `rustc` invocation to `wasm32-unknown-unknown`; no
+`Cargo.toml`, no build script. The contract is not imported, it is the crate:
+`contract.rs` is included at the root, so a module reaches everything through
+`use crate::*`.
 
 ## Writing one
 
 ```rust
-// bundle/data.rs
-#[repr(C)]
-#[derive(Clone, Copy, se::Schema)]
-pub struct Transform { pub pos: [f32; 3], pub rot: [f32; 4], pub scale: [f32; 3] }
-
-se::layouts!(Transform);
+// game/game1.rs — C: read input, write control vars
+#[no_mangle]
+pub extern "C" fn tick(frame: u32) -> u32 {
+    unsafe {
+        let input = &*(arena::INPUT as *const Input);
+        let look = &mut *(arena::LOOK as *mut Look);
+        if input.pressed & KEY_M != 0 { look.asset = (look.asset + 1) % 3; }
+        look.bodies = 4;                                   // ask for a roster
+        (*se_pool_mut(arena::POOL_BODIES)).len = look.bodies;
+    }
+    0
+}
 ```
 
 ```rust
-// process/orbit.rs — the parameter list IS the query
-use data::{Orbit, Transform};
-
+// process/orbit.rs — D: the parameter list is the query
 #[se::stage]
-fn orbit(t: &mut Transform, o: &mut Orbit, dt: f32) { /* ... */ }
-
-se::stages!(orbit);
+fn orbit(o: &mut Orbit, t: &mut Transform) {
+    let dt = unsafe { (*(arena::CLOCK as *const Clock)).dt };
+    o.phase += o.speed * dt;
+    t.pos = [o.center[0] + cos(o.phase) * o.radius, 0.0, o.center[2] + sin(o.phase) * o.radius];
+}
 ```
 
-Reaching outside the signature is not expressible. There is no world handle, no
-command buffer, no escape hatch — so "who wrote this component?" is answered by
-reading one file.
+`#[se::stage]` writes an `se.stages` entry naming each component and whether it
+is `&` or `&mut`, and exports the batched loop — the per-row loop runs inside
+the module, one boundary crossing per stage. The host checks the entry against
+the contract: unknown components, a component named twice, or columns from two
+pools are refused.
 
 ```rust
-// render/solid.rs — pure: data + assets in, buffers out
-se::graph!("solid", |g| g.present("scene").pass("bodies", |p| p
-    .shader(format!("{}{}", wgsl::MESH_VS, shade::FS))
-    .color(&["scene"]).depth("depth")
-    .uniform_of("Camera")
-    .instanced("Transform", "model.obj")));
+// render/solid.rs — V: record commands; the host replays them
+#[used] #[link_section = "se.wgsl"]
+static WGSL: [u8; include_bytes!("solid/shader.wgsl").len()] = *include_bytes!("solid/shader.wgsl");
+
+#[no_mangle]
+pub extern "C" fn record() -> u32 {
+    unsafe {
+        let cmds = arena::COMMANDS as *mut Command;
+        *cmds.add(0) = Command { kind: BEGIN_PASS, ..BLANK };
+        *cmds.add(1) = Command { kind: DRAW_INSTANCED, vertices: 12,
+            column: arena::COL_TRANSFORM, count: se_pool(arena::POOL_BODIES).len,
+            uniform_off: arena::CAMERA, uniform_len: Camera::SIZE, ..BLANK };
+        *cmds.add(2) = Command { kind: END_PASS, ..BLANK };
+        let f = &mut *(arena::FRAME as *mut Frame);
+        f.commands = arena::COMMANDS; f.count = 3;
+        3
+    }
+}
 ```
 
-`SeInstance` and `SeUniform` are generated from the component layouts, so
-adding a field to `data.rs` makes it appear in the shader. `model.obj` names an
-asset, not a file: whichever `asset/*.so` fills the asset slot answers.
+```rust
+// asset/bunny.rs — M: no code, just bytes in a custom section
+#[used] #[link_section = "se.asset"]
+static DATA: [u8; include_bytes!("bunny/model.obj").len()] = *include_bytes!("bunny/model.obj");
+```
+
+A draw carries a column *index*, not a pointer or a copy: the instance buffer
+the host uploads is the column's own bytes at its own stride.
 
 ## Crates
 
 | Crate | Role |
 |---|---|
-| `se-abi` | every `#[repr(C)]` type that crosses a boundary. No deps, no alloc |
-| `se-macro` | `derive(Schema)`, `#[se::stage]`, `stages!` |
-| `se` | what a module compiles against: the entry macros and `GraphBuilder` |
-| `se-host` | loader, world (sparse sets), scheduler, `Ctl` vtable, bundle |
-| `se-render` | wgpu graph executor, OBJ meshes, layout → shader attributes |
-| `se-tui` | half-block presenter and the IDE panel |
-| `se-cli` | the `shinra` binary |
+| `se-contract` | `contract.wit` → `contract.rs` + `contract.wgsl` + `contract.wasm`; std430 layout, arena map, `se.stages` format |
+| `se-macro` | `#[se::stage]` |
+| `se` | what a module compiles against: `no_std`, re-exports `#[se::stage]` |
+| `se-vm` | the wasmtime host: one memory, the world (pools, columns, blobs), load/swap/rollback, fuel, saves, input |
+| `se-gpu` | headless wgpu: replays the command list, reads back pixels |
+| `se-tui` | the terminal IDE: panels, text-art viewport, log |
+| `se-cli` | the `shinra` binary: discover, build, run, reload, shot |
 
 The engine provides general tools. It has no camera, no sprite, no dialogue and
 no physics — those are things games have, and games live in
@@ -121,58 +229,65 @@ no physics — those are things games have, and games live in
 ## Using it
 
 ```bash
+rustup target add wasm32-unknown-unknown
 cargo build
 export SHINRA_ENGINE=$PWD
 
 target/debug/shinra build ../shinra-examples/game1
-target/debug/shinra run   ../shinra-examples/game1          # TUI
+target/debug/shinra run   ../shinra-examples          # a deck: every game in it
+target/debug/shinra run   ../shinra-examples/game1    # one game
 target/debug/shinra shot  ../shinra-examples/game1 -n 3 --size 160x90 > f.ppm
 ```
 
-`run` gives you the IDE: the presented buffer as truecolour half-blocks, and
-beside it the passes in execution order, the loaded modules, and a log. Every
-render pipeline gets a TUI, because the terminal is a presenter like any other.
+`run` opens the IDE: hierarchy (pools and rows), viewport, inspector (fields
+decoded from the contract, editable), project tree and a log. While it runs it
+polls the sources every 250 ms and hot-replaces whatever changed; a module
+that fails to build or traps is reported in red and the previous one keeps
+running. `--no-watch` turns that off.
 
-`esc` quits.
+| Key | |
+|---|---|
+| `r` | toggle Edit / Play |
+| `n` / `p` | next / previous game in the deck (`p` in Edit) |
+| `m` | viewport glyphs: mixed, quadrant, braille (Edit) |
+| `tab`, `ctrl+h/v/i/f/t` | focus a panel |
+| `F5` / `F9` | quick save / load — a save is the arena, byte for byte |
+| `esc` | leave Play; in Edit, quit (`q` too) |
+
+In Play every other key goes to the game through `control.input`.
 
 ### No GPU?
 
-wgpu will pick a software adapter. On Debian/Ubuntu:
+wgpu picks a software adapter. On Debian/Ubuntu:
 
 ```bash
 apt-get install -y mesa-vulkan-drivers libvulkan1
 ```
 
-This is a supported configuration, not a fallback — the engine is headless by
-design and never opens a window. `docker compose up` builds an image with it
-already installed.
+This is a supported configuration, not a fallback — the engine is headless and
+never opens a window. `docker compose run ide` uses an image with it installed;
+`docker compose run ci` runs `scripts/ci.sh`.
 
-### When a pass misbehaves
+## Known limits
 
-```bash
-SE_DUMP_WGSL=/tmp/wgsl target/debug/shinra shot <bundle> -n 1
-```
-
-writes each pass's fully composed shader, prelude included.
+- **One pass, one pipeline.** The replayer uploads every draw's instances and
+  uniform at offset 0, merges passes, and ignores `Command.shader`, so a frame
+  is effectively one draw. Multi-pass V is the next piece of work.
+- **No texture binding.** M can publish an image, but no shader can sample it
+  yet.
+- **The aspect ratio is a constant** in the shaders until the viewport is a
+  control var.
+- **Rollback restores modules, not the world.** Writes a trapping frame made
+  before it trapped stay.
 
 ## Notes from building it
 
-- **`dlopen` caches by path.** Reloading the same path silently returns the old
-  code, so every load goes through a fresh shadow copy.
-- **Nothing outlives its image.** The host deep-copies every string and byte at
-  registration, so only function pointers still point into a module — which is
-  why a module and the specs taken from it are dropped together.
-- **A `.so` loses its statics when it is swapped.** State that must survive is a
-  component. The examples follow this rule and so should you.
-- **Uniform fields arrive as `vec4`.** WGSL aligns `vec3` to 16 bytes and
-  `#[repr(C)]` aligns it to 4, so the host repacks rather than let the two
-  quietly disagree. Read `u.eye.xyz`, `u.fov.x`.
-- **A sampled buffer always reads the previous frame.** That is what keeps the
-  graph acyclic: a mirror showing a mirror is a one-frame delay, not a cycle.
-  It also means a multi-pass chain is one frame behind per hop.
-- **Meshes are normalized to a unit box.** Otherwise swapping `bunny.so` for
-  `teapot.so` would change the size of the world, and the two would not really
-  be interchangeable. Scale belongs to `Transform`.
+- **Uniform stack = arena base.** `--global-base` moves a module's statics but
+  not its stack, and rustc always passes `--stack-first`, so every module's
+  stack is `[0, stack-size)`. The contract's base must equal it; the host
+  refuses a contract that disagrees.
+- **A module loses its statics when it is swapped.** State that must survive is
+  a component or a control var — which is the spec's job, not a module's.
 
 ## Licence
 
