@@ -116,6 +116,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     // A different game is a different tree: it gets a new one.
     let mut reloader: Option<Reloader> = None;
     let mut index = 0u64;
+    // Real time not yet spent on simulation steps.
+    let mut acc = 0f32;
     let mut areas = Areas::default();
     let mut row_map: Vec<Option<Target>> = Vec::new();
     let mut project_ids: Vec<Option<(String, String)>> = Vec::new();
@@ -146,6 +148,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             match savefile::load(&mut live.vm, deck.src().name.as_str()) {
                 Ok((f, m)) => {
                     index = f;
+                    acc = 0.0;
                     ide.note(m);
                 }
                 Err(e) => ide.note(format!("load failed: {e:#}")),
@@ -161,6 +164,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             ide.note(format!("→ {}", ide.games[deck.current]));
             reopen(&deck, &opt, screen, &mut ide, &mut live);
             reloader = None;
+            acc = 0.0;
         }
 
         // Match the framebuffer to the panel that was actually drawn, and to
@@ -198,8 +202,21 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
         // No tick while editing: the scene stands still so it can be read. The
         // graph still records and replays, so the picture is live either way.
+        // Play advances by whole fixed steps from real time (0..4 per drawn
+        // frame), so the simulation rate never depends on the draw time.
         let stepped = if ide.mode.is_play() {
-            live.vm.frame(index as u32)
+            acc += dt.min(0.25);
+            let steps = ((acc / se_vm::clock::STEP) as u32).min(4);
+            acc -= steps as f32 * se_vm::clock::STEP;
+            let mut r = Ok((0, 0));
+            for _ in 0..steps {
+                r = live.vm.frame(index as u32);
+                if r.is_err() {
+                    break;
+                }
+                index += 1;
+            }
+            if steps == 0 { live.vm.record_only() } else { r }
         } else {
             live.vm.record_only()
         };
@@ -250,7 +267,6 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         let shown = Pixels { width: screen.0, height: screen.1, rgba: &picture };
         rt.draw(|f| areas = se_tui::draw(f, &ide, Some(&shown)))?;
 
-        index += 1;
         if opt.frames.is_some_and(|n| index >= n) {
             break;
         }

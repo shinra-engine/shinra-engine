@@ -49,8 +49,9 @@ cheap. The feel this is for is *gametok*: swipe, and you are in another game.
 
 One frame walks it in order, and nothing flows backwards:
 
-1. **C** `tick(frame)` reads `input` and writes the control var set — camera,
-   clock, how many rows each pool should have. Nothing else.
+1. The host writes `clock` (a fixed 1/60 s step) and `input`. **C** `tick(frame)`
+   reads them and writes the control var set — camera, how many rows each pool
+   should have. Nothing else.
 2. The host clamps each pool's length to its capacity. That is the whole of
    spawn and despawn: control asks for a roster by writing one number.
 3. **D** every stage runs over its pool's rows, reading control vars and
