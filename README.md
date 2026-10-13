@@ -49,9 +49,11 @@ cheap. The feel this is for is *gametok*: swipe, and you are in another game.
 
 One frame walks it in order, and nothing flows backwards:
 
-1. The host writes `clock` (a fixed 1/60 s step) and `input`. **C** `tick(frame)`
-   reads them and writes the control var set — camera, how many rows each pool
-   should have. Nothing else.
+1. The host writes `clock` (a fixed 1/60 s step) and `input`; a game never writes
+   the clock. **C** `tick(frame)` reads them and writes the control var set —
+   camera, how many rows each pool should have. Nothing else. The world is a
+   function of the arena and the inputs, so two runs fed the same input are
+   byte-identical.
 2. The host clamps each pool's length to its capacity. That is the whole of
    spawn and despawn: control asks for a roster by writing one number.
 3. **D** every stage runs over its pool's rows, reading control vars and
@@ -70,7 +72,7 @@ replaced between any two frames.
 package shinra:game1@0.1.0;
 
 interface components {          // per-row data; a stage writes one only via &mut
-  use shinra:engine/types.{vec3, vec4};
+  use shinra:engine/types.{vec3, vec4};   // the engine's own package
   record transform { pos: vec3, rot: vec4, scale: vec3, kind: u32 }
   record orbit { center: vec3, radius: f32, speed: f32, phase: f32, tilt: f32 }
 }
@@ -82,15 +84,13 @@ interface pools {               // columns that share one length: row i is one b
 
 interface control {             // the whole write surface of game.wasm
   record look  { asset: u32, graph: u32, bodies: u32 }
-  record clock { t: f32, dt: f32, frame: u32, swipe: s32 }
-  record input { down: u32, pressed: u32, released: u32,
-                 mouse-x: f32, mouse-y: f32, mouse-down: u32 }
 }
 ```
 
 The engine's own records — `types`, `handles`, `clock`, `input`, `command`, `frame` —
-are a second package, `shinra:engine`, injected by `se-contract`; a game never restates
-them and one that tries is refused.
+are a second package, `shinra:engine`, injected by `se-contract`; a game reaches them
+with `use shinra:engine/types.{…}`, never restates them, and one that tries is refused.
+The whole contract hashes to one `CONTRACT_ID` in `contract.rs`.
 
 WIT says *what* a field is. WGSL says *where* it sits: every layout is std430,
 because the GPU reads these records too (`vec3` aligns to 16 but stays 12 bytes
@@ -122,7 +122,8 @@ trusts:
 - **Statics by kind, not load order.** `--global-base` puts C at `0x800000`, D at
   `0xC00000`, V and M at `0x1000000`, so a replacement lands exactly where its
   predecessor was. A swap is re-instantiation, not relocation.
-- **Every module carries the contract's fingerprint.** One built against another
+- **Every module carries the contract's fingerprint.** Each embeds `CONTRACT_ID`
+  in an `se.contract-id` section; one built against another
   contract (or by hand, with none) is refused before it touches memory.
 - **Checked before it touches memory.** A module is compiled and checked —
   imports, its entry export, D's stages against the contract — before it is
@@ -153,6 +154,10 @@ a time. Each module is one `rustc` invocation to `wasm32-unknown-unknown`; no
 `Cargo.toml`, no build script. The contract is not imported, it is the crate:
 `contract.rs` is included at the root, so a module reaches everything through
 `use crate::*`.
+
+Assets get their ids by sorted file name, so `bunny.rs` and `teapot.rs` become
+`assets::BUNNY` and `assets::TEAPOT`, and a draw names one by id. Adding or
+removing an asset renumbers the rest, so the game restarts.
 
 ## Writing one
 
@@ -211,7 +216,7 @@ pub extern "C" fn record() -> u32 {
         let cmds = arena::COMMANDS as *mut Command;
         *cmds.add(0) = Command { kind: render::BEGIN_PASS, ..render::BLANK };
         *cmds.add(1) = Command { kind: render::DRAW_INSTANCED, vertices: 12,
-            column: arena::COL_TRANSFORM, count: se_pool(arena::POOL_BODIES).len,
+            column: arena::COL_TRANSFORM, mesh: assets::BUNNY, texture: render::NONE, count: se_pool(arena::POOL_BODIES).len,
             uniform_off: arena::CAMERA, uniform_len: Camera::SIZE, ..render::BLANK };
         *cmds.add(2) = Command { kind: render::END_PASS, ..render::BLANK };
         let f = &mut *(arena::FRAME as *mut Frame);
@@ -222,9 +227,8 @@ pub extern "C" fn record() -> u32 {
 ```
 
 ```rust
-// asset/bunny.rs — M: no code, just bytes in a custom section
-#[used] #[link_section = "se.asset"]
-static DATA: [u8; include_bytes!("bunny/model.obj").len()] = *include_bytes!("bunny/model.obj");
+// asset/bunny.rs — M: no code, just bytes
+se::asset!("bunny/model.obj");
 ```
 
 A draw carries a column *index*, not a pointer or a copy: the instance buffer
@@ -290,11 +294,11 @@ never opens a window. `docker compose run ide` uses an image with it installed;
 
 ## Known limits
 
-- **One pass, one pipeline.** The replayer uploads every draw's instances and
-  uniform at offset 0, merges passes, and ignores `Command.shader`, so a frame
-  is effectively one draw. Multi-pass V is the next piece of work.
-- **No texture binding.** M can publish an image, but no shader can sample it
-  yet.
+- **One pass.** `command.shader` and `frame.present` are reserved: the replayer
+  does not yet switch shaders or present a pass's output to another. Multi-pass V
+  is the next piece of work.
+- **Pair stages are brute force O(n·m).** A pair stage visits every pair inside
+  the module; there is no broadphase.
 - **The aspect ratio is a constant** in the shaders until the viewport is a
   control var.
 - **Rollback restores modules, not the world.** Writes a trapping frame made
