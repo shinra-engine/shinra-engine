@@ -75,18 +75,16 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     // instantiating. Each lands in a blob slot, and a record names it with a
     // `span` — which is why a 12-byte mesh and an 800-byte one cost the same
     // row.
-    if let Some(cat) = src.category("asset") {
-        for (i, m) in cat.modules.iter().enumerate() {
-            let path = out.join("asset").join(format!("{}.wasm", m.name));
-            let bytes = std::fs::read(&path)?;
-            vm.check_contract(&format!("asset/{}", m.name), &bytes)?;
-            match se_contract::wasm::section(&bytes, "se.asset") {
-                Ok(payload) => {
-                    let (at, len) = vm.put_blob(i as u32, payload)?;
-                    eprintln!("  asset {}: slot {i} -> 0x{at:08x} +{len}", m.name);
-                }
-                Err(_) => eprintln!("  asset {}: no se.asset section, skipped", m.name),
+    for (i, name) in src.asset_ids().iter().enumerate() {
+        let path = out.join("asset").join(format!("{name}.wasm"));
+        let bytes = std::fs::read(&path)?;
+        vm.check_contract(&format!("asset/{name}"), &bytes)?;
+        match se_contract::wasm::section(&bytes, "se.asset") {
+            Ok(payload) => {
+                let (at, len) = vm.put_blob(i as u32, payload)?;
+                eprintln!("  asset {name}: slot {i} -> 0x{at:08x} +{len}");
             }
+            Err(_) => eprintln!("  asset {name}: no se.asset section, skipped"),
         }
     }
 

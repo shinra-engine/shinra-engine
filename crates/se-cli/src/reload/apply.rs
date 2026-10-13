@@ -91,7 +91,7 @@ impl Reloader {
         let cat = src.category(category).with_context(|| format!("no {category}/ in `{}`", src.name))?;
         let members: Vec<&str> = members.iter().map(String::as_str).collect();
         self.compiles += 1;
-        build::compile(name, &members, cat, &self.out, &gen, &contract_rs, engine, &self.profile)?;
+        build::compile(name, &members, cat, &self.out, &gen, &contract_rs, engine, &self.profile, &src.asset_ids())?;
         Ok(match category.as_str() {
             "process" => {
                 // Every stage at once: `Vm::load` swaps the stage table
@@ -100,8 +100,8 @@ impl Reloader {
                 "process".to_string()
             }
             "asset" => {
-                // The slot is the module's position, as `live::open` put it.
-                let index = cat.modules.iter().position(|m| &m.name == name).context("asset vanished")?;
+                // The slot is the asset's id: its place among the sorted names.
+                let index = src.asset_ids().iter().position(|n| n == name).context("asset vanished")?;
                 let bytes = std::fs::read(wasm)?;
                 live.vm.check_contract(&format!("asset/{name}"), &bytes)?;
                 let payload = se_contract::wasm::section(&bytes, "se.asset")

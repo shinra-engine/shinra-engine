@@ -76,14 +76,12 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
     // Assets are data: the bytes ride in a custom section and never need
     // instantiating. A row names one with a `span`, so swapping a 12-byte mesh
     // for an 800-byte one changes two u32s and no layout.
-    if let Some(cat) = src.category("asset") {
-        for (i, m) in cat.modules.iter().enumerate() {
-            let bytes = std::fs::read(out.join("asset").join(format!("{}.wasm", m.name)))?;
-            vm.check_contract(&format!("asset/{}", m.name), &bytes)?;
-            if let Ok(payload) = se_contract::wasm::section(&bytes, "se.asset") {
-                vm.put_blob(i as u32, payload)?;
-                log.push(format!("asset {}: slot {i}, {} B", m.name, payload.len()));
-            }
+    for (i, name) in src.asset_ids().iter().enumerate() {
+        let bytes = std::fs::read(out.join("asset").join(format!("{name}.wasm")))?;
+        vm.check_contract(&format!("asset/{name}"), &bytes)?;
+        if let Ok(payload) = se_contract::wasm::section(&bytes, "se.asset") {
+            vm.put_blob(i as u32, payload)?;
+            log.push(format!("asset {name}: slot {i}, {} B", payload.len()));
         }
     }
 

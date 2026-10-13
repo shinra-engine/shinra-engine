@@ -168,6 +168,8 @@ pub struct Reloader {
     out: PathBuf,
     sel: Selection,
     profile: String,
+    /// The asset names when the run opened: ids are positions in it.
+    assets: Vec<String>,
     /// When each unit last failed, so the same broken input is compiled once.
     failed_at: HashMap<String, SystemTime>,
     /// When the last poll began: what a failure is dated with.
@@ -178,7 +180,9 @@ pub struct Reloader {
 
 impl Reloader {
     pub fn new(root: PathBuf, out: PathBuf, sel: Selection, profile: String) -> Self {
+        let assets = GameSrc::open(&root).map(|s| s.asset_ids()).unwrap_or_default();
         Reloader {
+            assets,
             root,
             out,
             sel,
@@ -198,6 +202,10 @@ impl Reloader {
     /// Reads mtimes only: no rustc, no Vm, no writes.
     pub fn plan(&self) -> Result<Plan> {
         let src = GameSrc::open(&self.root)?;
+        // Ids are positions: adding or removing an asset renumbers the rest.
+        if src.asset_ids() != self.assets {
+            return Ok(Plan::Restart);
+        }
         let units = stale(&src, &self.out, &self.sel)?;
         Ok(match units.as_slice() {
             [] => Plan::Nothing,
@@ -263,8 +271,17 @@ mod plan {
         let rl = reloader(&r, &o);
         assert_eq!(rl.plan().unwrap(), Plan::Nothing);
         at(&r.join("asset/kettle.rs"), T0 + 20);
+        assert_eq!(rl.plan().unwrap(), Plan::Restart);
+    }
+
+    #[test]
+    fn an_edited_asset_is_still_a_module() {
+        let (r, o) = fixture("plan-asset-edit");
+        let rl = reloader(&r, &o);
+        let name = GameSrc::open(&r).unwrap().asset_ids().into_iter().next().expect("fixture has an asset");
+        at(&r.join(format!("asset/{name}.rs")), T0 + 20);
         let Plan::Modules(u) = rl.plan().unwrap() else { panic!("not Modules") };
-        assert!(matches!(&u[..], [Unit::Module { name, .. }] if name == "kettle"));
+        assert!(matches!(&u[..], [Unit::Module { category, .. }] if category == "asset"));
     }
 
     #[test]

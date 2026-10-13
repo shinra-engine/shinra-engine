@@ -34,6 +34,9 @@
 /// loop that runs the body over every row of the pool.
 pub use se_macro::stage;
 
+/// `se::asset!("dir/model.obj")` — an asset module's whole body.
+pub use se_macro::asset;
+
 /// `#[derive(se::Schema)]` and `se::components!` — removed.
 ///
 /// A component is declared in `contract.wit` and generated, so declaring one

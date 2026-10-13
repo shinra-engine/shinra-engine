@@ -110,4 +110,13 @@ impl GameSrc {
         self.categories.iter().find(|c| c.name == name)
     }
 
+    /// Asset names in id order: an asset's id is its index here, so a game
+    /// names one by `assets::NAME` and the id only moves when the set does.
+    pub fn asset_ids(&self) -> Vec<String> {
+        let mut v: Vec<String> =
+            self.category("asset").map_or_else(Vec::new, |c| c.modules.iter().map(|m| m.name.clone()).collect());
+        v.sort();
+        v
+    }
+
 }

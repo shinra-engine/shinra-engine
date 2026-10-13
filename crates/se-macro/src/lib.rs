@@ -4,6 +4,7 @@
 use quote::quote;
 use syn::{parse_macro_input, ItemFn};
 
+mod asset;
 mod stage;
 
 const GONE: &str = "components are declared in contract.wit, not in Rust — \
@@ -25,6 +26,14 @@ pub fn derive_schema(_input: proc_macro::TokenStream) -> proc_macro::TokenStream
 #[proc_macro]
 pub fn components(_input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     gone().into()
+}
+
+/// Publish a file as this module's asset: its bytes in `se.asset`, its
+/// lower-case extension in `se.asset.kind`.
+#[proc_macro]
+pub fn asset(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let path = parse_macro_input!(input as syn::LitStr);
+    asset::asset(path).unwrap_or_else(syn::Error::into_compile_error).into()
 }
 
 /// Make a function a stage: its parameter list becomes its query.
