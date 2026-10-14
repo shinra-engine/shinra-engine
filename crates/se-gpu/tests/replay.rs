@@ -71,7 +71,10 @@ fn replay(r: &mut Rig, cmds: &[Command]) -> Result<se_gpu::replay::Report> {
 
 fn refused(r: &mut Rig, cmds: &[Command], want: &str) {
     let e = replay(r, cmds).expect_err("the frame should be refused");
-    assert!(format!("{e:#}").contains(want), "`{e:#}` should mention `{want}`");
+    assert!(
+        format!("{e:#}").contains(want),
+        "`{e:#}` should mention `{want}`"
+    );
 }
 
 #[test]
@@ -93,7 +96,11 @@ fn an_absurd_draw_count_is_refused() -> Result<()> {
     let mut r = rig()?;
     // An absurd count is refused by the capacity check, which runs before the
     // pool and memory checks; those stay as the defence behind it.
-    let draw = Command { column: r.column, count: u32::MAX, ..cmd(DRAW_INSTANCED) };
+    let draw = Command {
+        column: r.column,
+        count: u32::MAX,
+        ..cmd(DRAW_INSTANCED)
+    };
     refused(
         &mut r,
         &[cmd(BEGIN_PASS), draw, cmd(END_PASS)],
@@ -106,7 +113,13 @@ fn an_absurd_draw_count_is_refused() -> Result<()> {
 fn a_uniform_past_the_memory_is_refused() -> Result<()> {
     let mut r = rig()?;
     let end = r.vm.bytes().len() as u32;
-    let draw = Command { column: r.column, count: 1, uniform_off: end - 16, uniform_len: 64, ..cmd(DRAW_INSTANCED) };
+    let draw = Command {
+        column: r.column,
+        count: 1,
+        uniform_off: end - 16,
+        uniform_len: 64,
+        ..cmd(DRAW_INSTANCED)
+    };
     refused(
         &mut r,
         &[cmd(BEGIN_PASS), draw, cmd(END_PASS)],
@@ -119,12 +132,48 @@ fn a_uniform_past_the_memory_is_refused() -> Result<()> {
 fn a_valid_frame_reports_what_it_did() -> Result<()> {
     let mut r = rig()?;
     let clear = [0.25, 0.5, 0.75, 1.0];
-    let begin = Command { clear, ..cmd(BEGIN_PASS) };
-    let draw = Command { column: r.column, count: 2, ..cmd(DRAW_INSTANCED) };
+    let begin = Command {
+        clear,
+        ..cmd(BEGIN_PASS)
+    };
+    let draw = Command {
+        column: r.column,
+        count: 2,
+        ..cmd(DRAW_INSTANCED)
+    };
     let report = replay(&mut r, &[begin, draw, cmd(END_PASS)])?;
     assert_eq!(
         report,
-        se_gpu::replay::Report { passes: 1, draws: 1, instances: 2, clear, pipelines: 1 }
+        se_gpu::replay::Report {
+            passes: 1,
+            draws: 1,
+            instances: 2,
+            clear,
+            pipelines: 1
+        }
+    );
+    Ok(())
+}
+
+#[test]
+fn a_zero_instance_draw_is_a_noop() -> Result<()> {
+    let mut r = rig()?;
+    let clear = [0.2, 0.4, 0.6, 1.0];
+    let begin = Command {
+        clear,
+        ..cmd(BEGIN_PASS)
+    };
+    let draw = Command {
+        column: r.column,
+        count: 0,
+        ..cmd(DRAW_INSTANCED)
+    };
+    let report = replay(&mut r, &[begin, draw, cmd(END_PASS)])?;
+    assert_eq!(report.draws, 1, "the command is still reported");
+    assert_eq!(report.instances, 0);
+    assert!(
+        r.gpu.pixels()?.chunks(4).all(|p| p == [51, 102, 153, 255]),
+        "the zero-instance draw must leave the cleared target untouched"
     );
     Ok(())
 }
@@ -134,7 +183,10 @@ fn clear_only_frame_is_flat() -> Result<()> {
     // 64 wide has no row padding; 50 wide (200 of 256 bytes) needs it stripped.
     for (w, h) in [(64u32, 64u32), (50, 10)] {
         let mut r = rig_sized(w, h)?;
-        let begin = Command { clear: [0.2, 0.4, 0.6, 1.0], ..cmd(BEGIN_PASS) };
+        let begin = Command {
+            clear: [0.2, 0.4, 0.6, 1.0],
+            ..cmd(BEGIN_PASS)
+        };
         replay(&mut r, &[begin, cmd(END_PASS)])?;
         let px = r.gpu.pixels()?;
         assert_eq!(px.len(), (w * h * 4) as usize, "{w}x{h} length");
@@ -154,7 +206,14 @@ fn frame(draws: &[Command]) -> Vec<Command> {
 }
 
 fn draw(r: &Rig, count: u32, uniform_off: u32, uniform_len: u32) -> Command {
-    Command { column: r.column, count, uniform_off, uniform_len, vertices: 3, ..cmd(DRAW_INSTANCED) }
+    Command {
+        column: r.column,
+        count,
+        uniform_off,
+        uniform_len,
+        vertices: 3,
+        ..cmd(DRAW_INSTANCED)
+    }
 }
 
 /// Rows 0..3 of `transform` as triangles of scale 0.5 at the given x.
@@ -202,7 +261,15 @@ fn draws_do_not_share_a_uniform_slot() -> Result<()> {
     replay(&mut r, &frame(&[all, left]))?;
     let px = r.gpu.pixels()?;
     let green = |x: usize, y: usize| px[(y * 64 + x) * 4 + 1];
-    assert_eq!(green(16, 33), 255, "left triangle drawn with the second uniform");
-    assert_eq!(green(48, 33), 0, "right triangle drawn with the first uniform");
+    assert_eq!(
+        green(16, 33),
+        255,
+        "left triangle drawn with the second uniform"
+    );
+    assert_eq!(
+        green(48, 33),
+        0,
+        "right triangle drawn with the first uniform"
+    );
     Ok(())
 }

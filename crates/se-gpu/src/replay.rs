@@ -5,7 +5,7 @@
 //! WebGPU call it names, and to hand the GPU the column bytes exactly as the
 //! stage left them.
 
-use crate::command::{Command, NONE, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS};
+use crate::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS, NONE};
 use crate::resources::Loaded;
 use crate::{Gpu, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
@@ -39,7 +39,12 @@ impl Gpu {
         cmds: &[Command],
     ) -> Result<Report> {
         let mut report = Report::default();
-        let mut clear = wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        let mut clear = wgpu::Color {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0,
+        };
         let mut draws: Vec<&Command> = Vec::new();
 
         for c in cmds {
@@ -56,7 +61,9 @@ impl Gpu {
                 }
                 DRAW_INSTANCED | DRAW_FULLSCREEN => draws.push(c),
                 END_PASS => {}
-                k => bail!("render.wasm recorded command kind {k}, which this host has no rule for"),
+                k => {
+                    bail!("render.wasm recorded command kind {k}, which this host has no rule for")
+                }
             }
         }
         if report.passes == 0 {
@@ -64,7 +71,10 @@ impl Gpu {
         }
 
         if draws.len() > UNIFORM_SLOTS as usize {
-            bail!("frame has {} draws but only {UNIFORM_SLOTS} uniform slots", draws.len())
+            bail!(
+                "frame has {} draws but only {UNIFORM_SLOTS} uniform slots",
+                draws.len()
+            )
         }
 
         // Uploads first: a render pass borrows the encoder, and a column is
@@ -74,14 +84,21 @@ impl Gpu {
         for (k, d) in draws.iter().enumerate() {
             let mut range = (0u64, 0u64);
             if d.kind == DRAW_INSTANCED {
-                let pool = world.pool_of.get(d.column as usize).copied().unwrap_or(u32::MAX);
+                let pool = world
+                    .pool_of
+                    .get(d.column as usize)
+                    .copied()
+                    .unwrap_or(u32::MAX);
                 if let Some(cap) = world.pool_cap.get(pool as usize).copied() {
                     if d.count > cap {
                         let name = meta
                             .components
                             .get(d.column as usize)
                             .map_or("?", |c| c.name.as_str());
-                        bail!("draw names {} rows of `{name}` but the pool holds only {cap}", d.count)
+                        bail!(
+                            "draw names {} rows of `{name}` but the pool holds only {cap}",
+                            d.count
+                        )
                     }
                 }
                 let desc = meta.columns_at + d.column * COLUMN_BYTES;
@@ -124,7 +141,8 @@ impl Gpu {
                 let bytes = mem
                     .get(u..u + d.uniform_len as usize)
                     .context("the uniform a draw names runs past the memory")?;
-                self.queue.write_buffer(&self.uniform, (k as u32 * UNIFORM_BYTES) as u64, bytes);
+                self.queue
+                    .write_buffer(&self.uniform, (k as u32 * UNIFORM_BYTES) as u64, bytes);
             }
         }
         report.pipelines = self.pipelines.len();
@@ -154,6 +172,13 @@ impl Gpu {
                 let slot = k as u32 * UNIFORM_BYTES;
                 match d.kind {
                     DRAW_INSTANCED => {
+                        // WebGPU rejects an empty buffer slice. A zero-row
+                        // pool is nevertheless a normal state (for example,
+                        // while a game is entering Play), and a zero-instance
+                        // draw has no visible work to submit.
+                        if d.count == 0 {
+                            continue;
+                        }
                         let mesh = match self.resources.get(d.mesh as usize) {
                             Some(Some(Loaded::Mesh(m))) => Some(m),
                             _ => None,
@@ -217,10 +242,18 @@ impl Gpu {
             _ => "absent",
         };
         if d.mesh != NONE && kind(d.mesh) != "mesh" {
-            bail!("draw names asset {} as a mesh but it is {}", d.mesh, kind(d.mesh))
+            bail!(
+                "draw names asset {} as a mesh but it is {}",
+                d.mesh,
+                kind(d.mesh)
+            )
         }
         if d.texture != NONE && kind(d.texture) != "texture" {
-            bail!("draw names asset {} as a texture but it is {}", d.texture, kind(d.texture))
+            bail!(
+                "draw names asset {} as a texture but it is {}",
+                d.texture,
+                kind(d.texture)
+            )
         }
         Ok(())
     }
@@ -243,7 +276,10 @@ impl Gpu {
                         size: wgpu::BufferSize::new(UNIFORM_BYTES as u64),
                     }),
                 },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(view) },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
@@ -257,8 +293,10 @@ impl Gpu {
     pub fn pixels(&self) -> Result<Vec<u8>> {
         let slice = self.target.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None })?;
+        self.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: None,
+        })?;
         let padded = slice.get_mapped_range().to_vec();
         self.target.readback.unmap();
         // Drop the row padding the copy required.
