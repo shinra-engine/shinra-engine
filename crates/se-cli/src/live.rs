@@ -65,6 +65,14 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
         vm.load(slot, &name, std::fs::read(&path)?)
             .with_context(|| format!("loading {cat}/{name}.wasm"))?;
     }
+
+    // An editor opens frozen, but it must not open uninitialised. Games create
+    // their roster, camera and initial control state in tick(0); leaving that
+    // until Play makes an Edit-mode viewport show only a clear (or an empty
+    // pool). Run that single frame while standing the game up, then the run
+    // loop can stay in Edit without advancing the simulation.
+    vm.frame(0).context("initializing game frame 0")?;
+
     if !vm.stages().is_empty() {
         let n: Vec<&str> = vm.stages().iter().map(|s| s.name.as_str()).collect();
         log.push(format!("stages: {}", n.join(", ")));
