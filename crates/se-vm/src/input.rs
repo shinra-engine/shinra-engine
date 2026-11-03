@@ -101,3 +101,102 @@ pub const FIELDS: [(&str, u32); 6] = [
     ("mouse_down", 20),
 ];
 pub const BYTES: u32 = 24;
+
+/// Gamepad button bits, for `Pad::down`/`pressed`/`released`.
+///
+/// ```text
+///   bit  0  south      bit  1  east       bit  2  west       bit  3  north
+///   bit  4  lb          bit  5  rb         bit  6  back       bit  7  start
+///   bit  8  left-stick  bit  9  right-stick
+///   bit 10  dpad-up     bit 11  dpad-down  bit 12  dpad-left  bit 13  dpad-right
+/// ```
+pub const PAD_SOUTH: u32 = 1 << 0;
+pub const PAD_EAST: u32 = 1 << 1;
+pub const PAD_WEST: u32 = 1 << 2;
+pub const PAD_NORTH: u32 = 1 << 3;
+pub const PAD_LB: u32 = 1 << 4;
+pub const PAD_RB: u32 = 1 << 5;
+pub const PAD_BACK: u32 = 1 << 6;
+pub const PAD_START: u32 = 1 << 7;
+pub const PAD_LSTICK: u32 = 1 << 8;
+pub const PAD_RSTICK: u32 = 1 << 9;
+pub const PAD_DPAD_UP: u32 = 1 << 10;
+pub const PAD_DPAD_DOWN: u32 = 1 << 11;
+pub const PAD_DPAD_LEFT: u32 = 1 << 12;
+pub const PAD_DPAD_RIGHT: u32 = 1 << 13;
+
+/// What the host writes into an optional `pad` control var each frame.
+///
+/// Laid out to match `interface control`'s `pad` record: three button masks,
+/// then the two sticks and two triggers. The host checks the contract's
+/// offsets before it writes, same rule as [`Keys`].
+#[derive(Clone, Copy, Default, Debug, PartialEq)]
+pub struct Pad {
+    /// Set while held.
+    pub down: u32,
+    /// Set only on the frame the button went down.
+    pub pressed: u32,
+    /// Set only on the frame it came up.
+    pub released: u32,
+    pub lx: f32,
+    pub ly: f32,
+    pub rx: f32,
+    pub ry: f32,
+    pub lt: f32,
+    pub rt: f32,
+}
+
+impl Pad {
+    /// The 36 bytes the record occupies, in its own order.
+    pub fn to_bytes(self) -> [u8; 36] {
+        let mut b = [0u8; 36];
+        b[0..4].copy_from_slice(&self.down.to_le_bytes());
+        b[4..8].copy_from_slice(&self.pressed.to_le_bytes());
+        b[8..12].copy_from_slice(&self.released.to_le_bytes());
+        b[12..16].copy_from_slice(&self.lx.to_le_bytes());
+        b[16..20].copy_from_slice(&self.ly.to_le_bytes());
+        b[20..24].copy_from_slice(&self.rx.to_le_bytes());
+        b[24..28].copy_from_slice(&self.ry.to_le_bytes());
+        b[28..32].copy_from_slice(&self.lt.to_le_bytes());
+        b[32..36].copy_from_slice(&self.rt.to_le_bytes());
+        b
+    }
+
+    /// Fold a frame's worth of button state into the three masks. `held` is
+    /// what is down now; `was` is what was down last frame.
+    pub fn from_held(held: u32, was: u32, sticks: [f32; 4], triggers: [f32; 2]) -> Pad {
+        Pad {
+            down: held,
+            pressed: held & !was,
+            released: was & !held,
+            lx: sticks[0],
+            ly: sticks[1],
+            rx: sticks[2],
+            ry: sticks[3],
+            lt: triggers[0],
+            rt: triggers[1],
+        }
+    }
+
+    pub fn is_down(self, bit: u32) -> bool {
+        self.down & bit != 0
+    }
+    pub fn just_pressed(self, bit: u32) -> bool {
+        self.pressed & bit != 0
+    }
+}
+
+/// `Pad`'s field names and offsets, as this engine writes them. Checked
+/// against the contract at load, like [`FIELDS`].
+pub const PAD_FIELDS: [(&str, u32); 9] = [
+    ("down", 0),
+    ("pressed", 4),
+    ("released", 8),
+    ("lx", 12),
+    ("ly", 16),
+    ("rx", 20),
+    ("ry", 24),
+    ("lt", 28),
+    ("rt", 32),
+];
+pub const PAD_BYTES: u32 = 36;

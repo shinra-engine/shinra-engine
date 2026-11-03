@@ -22,6 +22,8 @@ pub mod stages;
 pub mod world;
 
 #[cfg(not(target_arch = "wasm32"))]
+mod control;
+#[cfg(not(target_arch = "wasm32"))]
 mod rollback;
 #[cfg(not(target_arch = "wasm32"))]
 mod vm;
