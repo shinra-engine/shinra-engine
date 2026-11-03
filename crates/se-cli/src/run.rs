@@ -91,6 +91,24 @@ fn viewport_guess(cols: u16, rows: u16) -> (u16, u16) {
     (w, h)
 }
 
+/// How many fixed steps real time `dt` buys against the carried-over
+/// remainder `acc`, and the remainder left after taking them. Capped at 4 so
+/// a stall never makes the game try to catch up all at once. Pulled out of
+/// the loop so it can be driven by a synthetic `dt` sequence in a test,
+/// independent of the render-skip decision below.
+fn advance_steps(acc: f32, dt: f32) -> (u32, f32) {
+    let acc = acc + dt.min(0.25);
+    let steps = ((acc / se_vm::clock::STEP) as u32).min(4);
+    (steps, acc - steps as f32 * se_vm::clock::STEP)
+}
+
+/// Whether there is enough time left before `TARGET` to pay for a render
+/// costing `last_cost`. Computed independently of `advance_steps`: it must
+/// never feed back into the simulation's step count or accumulator.
+fn should_skip_render(remaining: Option<Duration>, last_cost: Duration) -> bool {
+    remaining.is_some_and(|r| r < last_cost)
+}
+
 pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let mut term = Terminal::enter()?;
     let mut rt = RTerminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -208,9 +226,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         // Play advances by whole fixed steps from real time (0..4 per drawn
         // frame), so the simulation rate never depends on the draw time.
         let stepped = if ide.mode.is_play() {
-            acc += dt.min(0.25);
-            let steps = ((acc / se_vm::clock::STEP) as u32).min(4);
-            acc -= steps as f32 * se_vm::clock::STEP;
+            let (steps, new_acc) = advance_steps(acc, dt);
+            acc = new_acc;
             let mut r = Ok((0, 0));
             for _ in 0..steps {
                 r = live.vm.frame(index as u32);
@@ -235,7 +252,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         // screen instead of going blank. The simulation accumulator above is
         // unaffected either way.
         let remaining = TARGET.checked_sub(started.elapsed());
-        let over_budget = remaining.is_some_and(|r| r < live.gpu.last_cost());
+        let over_budget = should_skip_render(remaining, live.gpu.last_cost());
         if !over_budget {
             let px = match command::read(&live.vm.meta, live.vm.bytes()) {
                 Ok((cmds, _)) => {
@@ -351,3 +368,6 @@ fn watch(
     }
     false
 }
+
+#[cfg(test)]
+mod tests;
