@@ -20,7 +20,9 @@ pub use resources::Resource;
 use resources::Loaded;
 
 use anyhow::Result;
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::time::Duration;
 use se_vm::world::Meta;
 
 pub struct Target {
@@ -51,6 +53,9 @@ pub struct Gpu {
     sampler: wgpu::Sampler,
     /// 1x1 white, bound when a draw names no texture.
     white: wgpu::TextureView,
+    /// Cost of the most recent `replay()` + `pixels()` pair. `pixels()` takes
+    /// `&self`, so this needs interior mutability to be updated from there.
+    last_cost: Cell<Duration>,
 }
 
 /// Bytes the instance buffer holds, shared by every draw of a frame.
@@ -179,6 +184,7 @@ impl Gpu {
             resources: Vec::new(),
             sampler,
             white,
+            last_cost: Cell::new(Duration::ZERO),
         })
     }
 

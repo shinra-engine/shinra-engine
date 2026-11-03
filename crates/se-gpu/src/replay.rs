@@ -10,6 +10,7 @@ use crate::resources::Loaded;
 use crate::{Gpu, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
+use std::time::Instant;
 
 /// What one replayed frame did, so a caller can assert on it without reading
 /// pixels back.
@@ -31,7 +32,24 @@ fn u32_at(m: &[u8], at: u32) -> u32 {
 impl Gpu {
     /// Replay one recorded frame. `mem` is the shared linear memory — the
     /// world as it stands, not a copy of it.
+    ///
+    /// Times the call and stores it in `last_cost`, replacing any prior
+    /// value — this is the cost of the most recent replay, not a running
+    /// total.
     pub fn replay(
+        &mut self,
+        meta: &Meta,
+        world: &World,
+        mem: &[u8],
+        cmds: &[Command],
+    ) -> Result<Report> {
+        let start = Instant::now();
+        let result = self.replay_inner(meta, world, mem, cmds);
+        self.last_cost.set(start.elapsed());
+        result
+    }
+
+    fn replay_inner(
         &mut self,
         meta: &Meta,
         world: &World,
@@ -290,7 +308,25 @@ impl Gpu {
 
     /// The rendered image, RGBA8. Offscreen for now — a window is the same
     /// replay against a surface texture.
+    ///
+    /// Adds its elapsed time to `last_cost` rather than replacing it, so
+    /// after a `replay()` then `pixels()` call pair, `last_cost()` reflects
+    /// both.
     pub fn pixels(&self) -> Result<Vec<u8>> {
+        let start = Instant::now();
+        let result = self.pixels_inner();
+        self.last_cost.set(self.last_cost.get() + start.elapsed());
+        result
+    }
+
+    /// Cost of the most recent `replay()` + `pixels()` call pair. Resets at
+    /// the start of each `replay()` call, so this is never a running total
+    /// across many frames.
+    pub fn last_cost(&self) -> std::time::Duration {
+        self.last_cost.get()
+    }
+
+    fn pixels_inner(&self) -> Result<Vec<u8>> {
         let slice = self.target.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.device.poll(wgpu::PollType::Wait {
