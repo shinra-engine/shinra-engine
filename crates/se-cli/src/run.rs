@@ -121,6 +121,9 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let mut areas = Areas::default();
     let mut row_map: Vec<Option<Target>> = Vec::new();
     let mut project_ids: Vec<Option<(String, String)>> = Vec::new();
+    // Holds the last drawn frame so a skipped render redraws it instead of a
+    // blank one.
+    let mut picture: Vec<u8> = Vec::new();
 
     loop {
         let started = Instant::now();
@@ -227,21 +230,33 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             report::frame_error(&mut ide, &e, live.vm.take_rollback());
         }
 
-        let px = match command::read(&live.vm.meta, live.vm.bytes()) {
-            Ok((cmds, _)) => {
-                match live.gpu.replay(&live.vm.meta, &live.vm.world, live.vm.bytes(), &cmds) {
-                    Ok(_) => live.gpu.pixels().ok(),
-                    Err(e) => {
-                        ide.note(format!("replay: {e:#}"));
-                        None
+        // Skip the render this iteration when there isn't enough time left
+        // before TARGET to pay for it; the previous `picture` stays on
+        // screen instead of going blank. The simulation accumulator above is
+        // unaffected either way.
+        let remaining = TARGET.checked_sub(started.elapsed());
+        let over_budget = remaining.is_some_and(|r| r < live.gpu.last_cost());
+        if !over_budget {
+            let px = match command::read(&live.vm.meta, live.vm.bytes()) {
+                Ok((cmds, _)) => {
+                    match live
+                        .gpu
+                        .replay(&live.vm.meta, &live.vm.world, live.vm.bytes(), &cmds)
+                    {
+                        Ok(_) => live.gpu.pixels().ok(),
+                        Err(e) => {
+                            ide.note(format!("replay: {e:#}"));
+                            None
+                        }
                     }
                 }
-            }
-            Err(e) => {
-                ide.note(format!("commands: {e:#}"));
-                None
-            }
-        };
+                Err(e) => {
+                    ide.note(format!("commands: {e:#}"));
+                    None
+                }
+            };
+            picture = px.unwrap_or_default();
+        }
 
         ide.frame = index;
         ide.hierarchy = hierarchy(&live.vm);
@@ -263,7 +278,6 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         project_ids = ids;
         ide.clamp_project();
 
-        let picture = px.unwrap_or_default();
         let shown = Pixels { width: screen.0, height: screen.1, rgba: &picture };
         rt.draw(|f| areas = se_tui::draw(f, &ide, Some(&shown)))?;
 
