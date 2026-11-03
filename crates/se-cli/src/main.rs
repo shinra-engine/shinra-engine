@@ -20,6 +20,7 @@ mod edit;
 mod inspect;
 mod intents;
 mod live;
+mod pad;
 mod reload;
 mod report;
 mod run;
@@ -50,6 +51,8 @@ options
       --save <file>   shot: write a save after the last frame
       --load <file>   shot: resume from a save, frames continue from its counter
       --no-watch      run: do not reload modules when their sources change
+      --pad <file>    feed a scripted gamepad sequence (see pad.rs); headless
+                       runs have no other source of one
 ";
 
 pub struct Args {
@@ -65,6 +68,7 @@ pub struct Args {
     pub save: Option<PathBuf>,
     pub load: Option<PathBuf>,
     pub watch: bool,
+    pub pad: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -92,6 +96,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
         save: None,
         load: None,
         watch: true,
+        pad: None,
     };
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -104,6 +109,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
             "--save" => a.save = it.next().map(PathBuf::from),
             "--load" => a.load = it.next().map(PathBuf::from),
             "--no-watch" => a.watch = false,
+            "--pad" => a.pad = it.next().map(PathBuf::from),
             "--size" => {
                 let s = it.next().unwrap_or_default();
                 let (w, h) = s.split_once('x').unwrap_or(("320", "180"));
@@ -136,6 +142,7 @@ fn main() -> Result<()> {
                 game: a.game.clone(),
                 render: a.render.clone(),
                 watch: a.watch,
+                pad: a.pad.clone(),
             },
         );
     }

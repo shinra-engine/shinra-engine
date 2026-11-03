@@ -16,6 +16,7 @@
 
 use crate::build;
 use crate::discover::GameSrc;
+use crate::pad::{PadSource, ScriptedPad};
 use crate::Args;
 use anyhow::{bail, Context, Result};
 use se_gpu::{command, Gpu};
@@ -47,7 +48,11 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
         eprintln!("  stages: {}", names.join(", "));
     }
 
-    // One frame first, so the module can say what it wants drawn.
+    let mut pad_source = a.pad.as_deref().map(ScriptedPad::open).transpose()?;
+
+    // One frame first, so the module can say what it wants drawn. No pad
+    // state yet: the loop below is the real, numbered frame sequence a
+    // scripted source is written against, and this probe isn't part of it.
     let (rows, n) = vm.frame(0)?;
     for o in vm.take_overruns() {
         eprintln!("  {o}");
@@ -85,6 +90,9 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let end = start + a.frames.max(1);
     let mut pixels = Vec::new();
     for f in start..end {
+        if let Some(ps) = pad_source.as_mut() {
+            vm.set_pad(ps.poll(f))?;
+        }
         let (rows, _) = vm.frame(f)?;
         for o in vm.take_overruns() {
             eprintln!("  {o}");

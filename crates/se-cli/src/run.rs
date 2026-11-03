@@ -12,6 +12,7 @@
 use crate::deck::Deck;
 use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
+use crate::pad::{PadSource, ScriptedPad};
 use crate::reload::{Outcome, Reloader, Selection};
 use crate::report;
 use crate::savefile;
@@ -22,7 +23,7 @@ use se_gpu::command;
 use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
 use se_vm::input::Keys;
 use se_vm::memory::Slot;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
@@ -40,6 +41,9 @@ pub struct Options {
     pub render: Option<String>,
     /// Poll the source tree and reload what an edit made stale.
     pub watch: bool,
+    /// A scripted gamepad sequence; `None` means no `pad` control var is ever
+    /// written, same as before this existed.
+    pub pad: Option<PathBuf>,
 }
 
 
@@ -117,6 +121,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let size = rt.size()?;
     let mut cells = viewport_guess(size.width, size.height);
     let mut screen = framebuffer_for(cells.0, cells.1, ide.art);
+
+    let mut pad_source = opt.pad.as_deref().map(ScriptedPad::open).transpose()?;
 
     let mut log = Vec::new();
     let mut live = open(&deck, &opt, screen, &mut log)?;
@@ -230,6 +236,12 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             acc = new_acc;
             let mut r = Ok((0, 0));
             for _ in 0..steps {
+                if let Some(ps) = pad_source.as_mut() {
+                    if let Err(e) = live.vm.set_pad(ps.poll(index as u32)) {
+                        r = Err(e);
+                        break;
+                    }
+                }
                 r = live.vm.frame(index as u32);
                 if r.is_err() {
                     break;

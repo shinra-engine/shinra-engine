@@ -76,7 +76,7 @@ mod tests {
     }
 
     fn opts() -> Options {
-        Options { profile: "debug".into(), frames: None, game: None, render: Some("solid".into()), watch: false }
+        Options { profile: "debug".into(), frames: None, game: None, render: Some("solid".into()), watch: false, pad: None }
     }
 
     #[test]

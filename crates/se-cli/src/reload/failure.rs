@@ -24,7 +24,7 @@ pub(super) fn bump(p: &Path) {
 fn a_broken_tick_fails_once_and_a_fix_reloads() {
     let root = copy_game2(&format!("game2-failure-{}", std::process::id()));
     let deck = Deck::open(&root).unwrap();
-    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false };
+    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false, pad: None };
     let size = (64, 36);
     eprintln!("standing game2 up");
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();

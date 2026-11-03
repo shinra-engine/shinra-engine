@@ -23,7 +23,7 @@ fn apply_asset_puts_the_payload_and_does_not_leak() {
     fs::write(root.join("asset/notes/notes.txt"), "hello assets").unwrap();
     fs::write(root.join("asset/notes.rs"), "se::asset!(\"notes/notes.txt\");\n").unwrap();
     let deck = Deck::open(&root).unwrap();
-    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false };
+    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false, pad: None };
     let size = (64, 36);
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();
     let out = Path::new("target").join("shinra").join(&deck.src().name);
@@ -52,7 +52,7 @@ fn apply_asset_puts_the_payload_and_does_not_leak() {
 fn an_image_asset_goes_to_the_gpu_not_the_arena() {
     let root = copy_game2(&format!("game2-image-{}", std::process::id()));
     let deck = Deck::open(&root).unwrap();
-    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false };
+    let opts = Options { profile: "debug".into(), frames: None, game: None, render: None, watch: false, pad: None };
     let size = (64, 36);
     let mut live = live::open(&deck, &opts, size, &mut Vec::new()).unwrap();
     let out = Path::new("target").join("shinra").join(&deck.src().name);
