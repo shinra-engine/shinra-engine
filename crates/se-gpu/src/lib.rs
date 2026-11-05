@@ -64,6 +64,12 @@ pub const INSTANCE_BYTES: u32 = 4096 * 64;
 pub const UNIFORM_SLOTS: u32 = 64;
 /// Bytes per uniform slot (the dynamic-offset alignment).
 pub const UNIFORM_BYTES: u32 = 256;
+/// Wall-clock bound on waiting for a replayed frame's GPU work to finish.
+/// Two orders of magnitude above `run.rs`'s ~33ms `TARGET` render budget, so
+/// normal variance never trips it while a genuinely hung driver is caught
+/// well inside human-noticeable delay. A placeholder like `run.rs`'s own
+/// `TARGET`/`WATCH`, not empirically measured the way `DEFAULT_FUEL` was.
+pub const GPU_BUDGET: Duration = Duration::from_secs(2);
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 

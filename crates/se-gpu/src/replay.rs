@@ -7,7 +7,7 @@
 
 use crate::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS, NONE};
 use crate::resources::Loaded;
-use crate::{Gpu, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
+use crate::{Gpu, GPU_BUDGET, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
 use std::time::Instant;
@@ -329,10 +329,19 @@ impl Gpu {
     fn pixels_inner(&self) -> Result<Vec<u8>> {
         let slice = self.target.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        })?;
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(GPU_BUDGET),
+            })
+            .map_err(|e| {
+                if matches!(e, wgpu::PollError::Timeout) {
+                    anyhow::Error::new(e)
+                        .context(format!("GPU replay exceeded its {GPU_BUDGET:?} budget"))
+                } else {
+                    e.into()
+                }
+            })?;
         let padded = slice.get_mapped_range().to_vec();
         self.target.readback.unmap();
         // Drop the row padding the copy required.
