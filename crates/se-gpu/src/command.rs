@@ -20,7 +20,7 @@ pub const END_PASS: u32 = 3;
 pub const NONE: u32 = u32::MAX;
 
 /// `render::command`, as this engine reads it.
-const COMMAND_FIELDS: [(&str, u32); 13] = [
+const COMMAND_FIELDS: [(&str, u32); 16] = [
     ("kind", 0),
     ("vertices", 4),
     ("shader", 8),
@@ -34,11 +34,14 @@ const COMMAND_FIELDS: [(&str, u32); 13] = [
     ("clear_g", 40),
     ("clear_b", 44),
     ("clear_a", 48),
+    ("target", 52),
+    ("sample", 56),
+    ("render_flags", 60),
 ];
 const FRAME_FIELDS: [(&str, u32); 4] =
     [("commands", 0), ("count", 4), ("present", 8), ("epoch", 12)];
 
-pub const COMMAND_BYTES: u32 = 52;
+pub const COMMAND_BYTES: u32 = 64;
 pub const FRAME_BYTES: u32 = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -57,6 +60,14 @@ pub struct Command {
     /// Asset id of the texture, or `NONE`.
     pub texture: u32,
     pub clear: [f32; 4],
+    /// Render target this pass draws into: 0 = present, non-zero names an
+    /// offscreen target. Not yet acted on by replay.
+    pub target: u32,
+    /// Target id to sample from an earlier pass this frame, or 0 for none.
+    /// Not yet acted on by replay.
+    pub sample: u32,
+    /// Reserved.
+    pub render_flags: u32,
 }
 
 /// WIT spells names in kebab-case and the generator snakes them; compare on
@@ -131,6 +142,9 @@ pub fn read(meta: &Meta, mem: &[u8]) -> Result<(Vec<Command>, u32)> {
                 f32_at(mem, c + 44),
                 f32_at(mem, c + 48),
             ],
+            target: u32_at(mem, c + 52),
+            sample: u32_at(mem, c + 56),
+            render_flags: u32_at(mem, c + 60),
         });
     }
     Ok((out, epoch))

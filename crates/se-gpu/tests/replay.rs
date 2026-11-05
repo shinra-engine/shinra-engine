@@ -62,6 +62,9 @@ fn cmd(kind: u32) -> Command {
         mesh: u32::MAX,
         texture: u32::MAX,
         clear: [0.0, 0.0, 0.0, 1.0],
+        target: 0,
+        sample: 0,
+        render_flags: 0,
     }
 }
 

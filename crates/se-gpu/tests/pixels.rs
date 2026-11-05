@@ -116,6 +116,7 @@ pub extern "C" fn record() -> u32 {
             kind: 0, vertices: 0, shader: 0, column: u32::MAX, count: 0,
             uniform_off: 0, uniform_len: 0, mesh: u32::MAX, texture: u32::MAX,
             clear_r: 0.0, clear_g: 0.0, clear_b: 0.0, clear_a: 1.0,
+            target: 0, sample: 0, render_flags: 0,
         };
         let cmds = arena::COMMANDS as *mut Command;
         // The look is a control var: swapping game.wasm changes the picture

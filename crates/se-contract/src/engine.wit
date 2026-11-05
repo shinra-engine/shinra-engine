@@ -64,6 +64,15 @@ interface render {
     /// Asset id of the texture to bind, or `u32::MAX` for none.
     texture: u32,
     clear-r: f32, clear-g: f32, clear-b: f32, clear-a: f32,
+    /// Render target this pass draws into: 0 = present, non-zero names an
+    /// offscreen target. Not yet acted on by replay — every pass still
+    /// targets present.
+    target: u32,
+    /// Target id to sample from an earlier pass this frame, or 0 for none.
+    /// Not yet acted on by replay.
+    sample: u32,
+    /// Reserved.
+    render-flags: u32,
   }
 
   record frame { commands: u32, count: u32, present: u32, epoch: u32 }

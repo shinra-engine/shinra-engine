@@ -54,8 +54,8 @@ fn a_dropped_field_changes_the_size() -> Result<()> {
     refused(|m| {
         let r = rec(m, "command");
         r.fields.retain(|f| f.name != "mesh");
-        r.size = 48;
-    }, "reads 52")
+        r.size = 60;
+    }, "reads 64")
 }
 
 #[test]

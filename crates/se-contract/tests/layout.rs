@@ -89,6 +89,20 @@ fn the_emitted_rust_asserts_its_own_offsets() {
 }
 
 #[test]
+fn render_command_is_64_bytes_with_the_offscreen_target_fields() {
+    let g = gen();
+    let r = g.contract.of("render").find(|r| r.name == "command").expect("render.command");
+    assert_eq!(r.size, 64);
+    let at = |name: &str| r.fields.iter().find(|f| f.name == name).unwrap().offset;
+    assert_eq!(at("mesh"), 28, "mesh keeps its offset from task-205");
+    assert_eq!(at("texture"), 32, "texture keeps its offset from task-205");
+    assert_eq!(at("clear-a"), 48);
+    assert_eq!(at("target"), 52, "0 = present, non-zero not yet acted on by replay");
+    assert_eq!(at("sample"), 56, "0 = none, not yet acted on by replay");
+    assert_eq!(at("render-flags"), 60, "reserved");
+}
+
+#[test]
 fn the_shader_sees_components_and_control_and_nothing_else() {
     let g = gen();
     assert!(g.wgsl.contains("struct Transform {"));

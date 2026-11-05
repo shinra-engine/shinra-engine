@@ -26,6 +26,7 @@ fn encode(c: &Command) -> Vec<u8> {
     for f in c.clear {
         b.extend_from_slice(&f.to_le_bytes());
     }
+    b.extend_from_slice(&words(&[c.target, c.sample, c.render_flags]));
     assert_eq!(b.len() as u32, COMMAND_BYTES);
     b
 }
@@ -46,6 +47,9 @@ fn sample(i: u32) -> Command {
         mesh: i,
         texture: 7 + i,
         clear: [0.25 * i as f32, 0.5, 0.75, 1.0],
+        target: i % 2,
+        sample: 20 + i,
+        render_flags: 0,
     }
 }
 
