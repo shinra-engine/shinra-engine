@@ -10,5 +10,12 @@ anyhow.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wasmtime.workspace = true
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys.workspace = true
+# Not yet used by mem/web.rs itself (it only needs js-sys's WebAssembly
+# binding) — reserved for T-c's wasm32 module loading, added now per
+# story-229/task-256's Target Invariant 3.
+web-sys.workspace = true
+
 [dev-dependencies]
 se-contract.workspace = true

@@ -1774,8 +1774,10 @@ name = "se-vm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "js-sys",
  "se-contract",
  "wasmtime",
+ "web-sys",
 ]
 
 [[package]]

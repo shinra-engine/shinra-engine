@@ -32,6 +32,10 @@ image      = { version = "0.25", default-features = false, features = ["png"] }
 crossterm  = "0.29"
 ratatui    = "0.29"
 libc       = "0.2"
+# wasm32 host target only (se-vm's WebMem; se-web's module loading later) —
+# never pulled in on native.
+js-sys     = "0.3"
+web-sys    = { version = "0.3", default-features = false }
 proc-macro2 = "1"
 quote      = "1"
 syn        = { version = "2", features = ["full"] }
