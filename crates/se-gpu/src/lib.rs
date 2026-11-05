@@ -11,6 +11,7 @@
 //! reason the host does not compile a `contract.rs` in.
 
 pub mod command;
+mod pass;
 mod pipeline;
 pub mod replay;
 pub mod resources;

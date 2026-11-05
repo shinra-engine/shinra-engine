@@ -2,7 +2,7 @@
 //! land in the four quadrants of the target.
 
 use anyhow::Result;
-use se_gpu::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, END_PASS};
+use se_gpu::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, END_PASS, NONE};
 use se_gpu::resources::decode;
 use se_gpu::Gpu;
 use se_vm::Vm;
@@ -35,7 +35,7 @@ fn cmd(kind: u32) -> Command {
         texture: u32::MAX,
         clear: [0.0, 0.0, 0.0, 1.0],
         target: 0,
-        sample: 0,
+        sample: NONE,
         render_flags: 0,
     }
 }
@@ -67,5 +67,63 @@ fn a_texture_draw_samples_the_image() -> Result<()> {
     let bad = Command { kind: DRAW_FULLSCREEN, texture: 9, ..cmd(0) };
     let e = gpu.replay(&vm.meta, &vm.world, vm.bytes(), &[cmd(BEGIN_PASS), bad, cmd(END_PASS)]).unwrap_err();
     assert!(format!("{e:#}").contains("asset 9 as a texture"), "{e:#}");
+    Ok(())
+}
+
+fn rig(w: u32, h: u32) -> Result<(Vm, Gpu)> {
+    let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
+    let g = se_contract::generate(&wit)?;
+    let vm = Vm::new(&g.module, 128)?;
+    let gpu = Gpu::new(&vm.meta, &format!("{}\n{SHADER}", g.wgsl), w, h)?;
+    Ok((vm, gpu))
+}
+
+#[test]
+fn a_fullscreen_draw_samples_an_earlier_pass_target() -> Result<()> {
+    let (vm, mut gpu) = rig(64, 64)?;
+
+    let pass1 = Command { target: 1, clear: [0.0, 1.0, 0.0, 1.0], ..cmd(BEGIN_PASS) };
+    let pass2 = Command { target: 0, clear: [0.0, 0.0, 0.0, 1.0], ..cmd(BEGIN_PASS) };
+    let composite = Command { kind: DRAW_FULLSCREEN, sample: 1, ..cmd(0) };
+    gpu.replay(
+        &vm.meta,
+        &vm.world,
+        vm.bytes(),
+        &[pass1, cmd(END_PASS), pass2, composite, cmd(END_PASS)],
+    )?;
+    let px = gpu.pixels()?;
+    assert_eq!(
+        &px[0..4],
+        &[0, 255, 0, 255],
+        "present must show pass 1's offscreen target, not the pass 2 clear or white"
+    );
+    Ok(())
+}
+
+#[test]
+fn sample_naming_a_target_no_earlier_pass_wrote_is_refused() -> Result<()> {
+    let (vm, mut gpu) = rig(64, 64)?;
+    let draw = Command { kind: DRAW_FULLSCREEN, sample: 5, ..cmd(0) };
+    let e = gpu
+        .replay(&vm.meta, &vm.world, vm.bytes(), &[cmd(BEGIN_PASS), draw, cmd(END_PASS)])
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("no earlier pass"), "{e:#}");
+    Ok(())
+}
+
+#[test]
+fn a_draw_cannot_set_both_texture_and_sample() -> Result<()> {
+    let (vm, mut gpu) = rig(64, 64)?;
+    let colours: [[u8; 4]; 4] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255]];
+    let img = image::RgbaImage::from_raw(2, 2, colours.concat()).unwrap();
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)?;
+    gpu.set_resource(3, decode("png", png.get_ref())?.unwrap());
+
+    let bad = Command { kind: DRAW_FULLSCREEN, texture: 3, sample: 1, ..cmd(0) };
+    let e = gpu
+        .replay(&vm.meta, &vm.world, vm.bytes(), &[cmd(BEGIN_PASS), bad, cmd(END_PASS)])
+        .unwrap_err();
+    assert!(format!("{e:#}").contains("both `texture` and `sample`"), "{e:#}");
     Ok(())
 }

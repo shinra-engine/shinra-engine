@@ -5,13 +5,13 @@
 //! WebGPU call it names, and to hand the GPU the column bytes exactly as the
 //! stage left them.
 
-use crate::command::{Command, BEGIN_PASS, DRAW_FULLSCREEN, DRAW_INSTANCED, END_PASS, NONE};
+use crate::command::{Command, DRAW_FULLSCREEN, DRAW_INSTANCED, NONE};
+use crate::pass::group_passes;
 use crate::resources::Loaded;
 use crate::{Gpu, GPU_BUDGET, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
-<<<<<<< HEAD
-use std::ops::Range;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// What one replayed frame did, so a caller can assert on it without reading
@@ -29,53 +29,6 @@ pub struct Report {
 fn u32_at(m: &[u8], at: u32) -> u32 {
     let a = at as usize;
     u32::from_le_bytes([m[a], m[a + 1], m[a + 2], m[a + 3]])
-}
-
-/// One `BEGIN_PASS..END_PASS` run: the target and clear it names, and the
-/// slice of the frame's draws (indices into the frame-wide, in-order draw
-/// list) it owns. A pass's draws are always contiguous in command order, so a
-/// half-open range into that one list is enough to say which are its own.
-struct PassGroup {
-    target: u32,
-    clear: [f32; 4],
-    draws: Range<usize>,
-}
-
-/// Splits a frame's commands into one group per pass plus the frame-wide, in
-/// command order, draw list every group's range indexes into. A draw outside
-/// any open pass, or a `BEGIN_PASS` before the previous one's `END_PASS`, is
-/// refused rather than silently merged into the wrong pass.
-fn group_passes(cmds: &[Command]) -> Result<(Vec<PassGroup>, Vec<&Command>)> {
-    let mut groups: Vec<PassGroup> = Vec::new();
-    let mut draws: Vec<&Command> = Vec::new();
-    let mut open = false;
-    for c in cmds {
-        match c.kind {
-            BEGIN_PASS => {
-                if open {
-                    bail!("a pass began before the previous one's END_PASS")
-                }
-                open = true;
-                groups.push(PassGroup {
-                    target: c.target,
-                    clear: c.clear,
-                    draws: draws.len()..draws.len(),
-                });
-            }
-            DRAW_INSTANCED | DRAW_FULLSCREEN => {
-                if !open {
-                    bail!("a draw was recorded outside any open pass")
-                }
-                draws.push(c);
-                groups.last_mut().unwrap().draws.end = draws.len();
-            }
-            END_PASS => open = false,
-            k => {
-                bail!("render.wasm recorded command kind {k}, which this host has no rule for")
-            }
-        }
-    }
-    Ok((groups, draws))
 }
 
 impl Gpu {
@@ -199,9 +152,18 @@ impl Gpu {
         }
         report.pipelines = self.pipelines.len();
 
-        // One bind group per draw per frame: its texture differs. Cheap at
-        // this scale; cache by texture id if draws ever number in thousands.
-        let binds: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.bind_for(d)).collect();
+        // One bind group per draw per frame: its texture differs. A draw's
+        // `sample` may only point to a target an earlier pass group of this
+        // same frame already wrote, so bind groups are resolved pass by
+        // pass, in order, tracking which target each finished group wrote.
+        let mut written: HashMap<u32, usize> = HashMap::new();
+        let mut binds: Vec<wgpu::BindGroup> = Vec::with_capacity(draws.len());
+        for (gi, group) in groups.iter().enumerate() {
+            for k in group.draws.clone() {
+                binds.push(self.bind_for(draws[k], &written, &views)?);
+            }
+            written.insert(group.target, gi);
+        }
 
         let mut enc = self.device.create_command_encoder(&Default::default());
         for (gi, group) in groups.iter().enumerate() {
@@ -317,13 +279,35 @@ impl Gpu {
         Ok(())
     }
 
-    /// Uniform, the draw's texture (or white) and the sampler.
-    fn bind_for(&self, d: &Command) -> wgpu::BindGroup {
-        let view = match self.resources.get(d.texture as usize) {
-            Some(Some(Loaded::Texture(t))) if d.texture != NONE => &t.view,
-            _ => &self.white,
+    /// Uniform, the draw's texture (or an earlier pass's target, or white)
+    /// and the sampler. `written` maps a target id to the index into `views`
+    /// of the most recent pass group, strictly before the one `d` belongs
+    /// to, that wrote it — a `DRAW_FULLSCREEN` naming an id missing from it
+    /// is refused rather than reading the current or a future pass's target.
+    fn bind_for(
+        &self,
+        d: &Command,
+        written: &HashMap<u32, usize>,
+        views: &[wgpu::TextureView],
+    ) -> Result<wgpu::BindGroup> {
+        let view = if d.kind == DRAW_FULLSCREEN && d.sample != NONE {
+            if d.texture != NONE {
+                bail!("a draw cannot set both `texture` and `sample`")
+            }
+            let gi = written.get(&d.sample).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "draw samples target {}, but no earlier pass this frame wrote it",
+                    d.sample
+                )
+            })?;
+            &views[*gi]
+        } else {
+            match self.resources.get(d.texture as usize) {
+                Some(Some(Loaded::Texture(t))) if d.texture != NONE => &t.view,
+                _ => &self.white,
+            }
         };
-        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        Ok(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.bind_layout,
             entries: &[
@@ -344,7 +328,7 @@ impl Gpu {
                     resource: wgpu::BindingResource::Sampler(&self.sampler),
                 },
             ],
-        })
+        }))
     }
 
     /// The rendered image, RGBA8. Offscreen for now — a window is the same
