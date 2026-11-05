@@ -6,7 +6,7 @@
 //! stage left them.
 
 use crate::command::{Command, DRAW_FULLSCREEN, DRAW_INSTANCED, NONE};
-use crate::pass::group_passes;
+use crate::pass::{self, group_passes};
 use crate::resources::Loaded;
 use crate::{Gpu, GPU_BUDGET, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
@@ -81,6 +81,7 @@ impl Gpu {
             .iter()
             .map(|g| self.target_view(g.target).clone())
             .collect();
+        let (depths, draw_depth) = pass::resolve_depth(self, &groups, draws.len());
 
         // Uploads first: a render pass borrows the encoder, and a column is
         // read straight out of the arena. Each draw gets its own bytes.
@@ -129,9 +130,9 @@ impl Gpu {
                 range = (off, end);
                 report.draws += 1;
                 report.instances += d.count;
-                self.ensure_pipeline(meta, d.column, d.mesh != NONE)?;
+                self.ensure_pipeline(meta, d.column, d.mesh != NONE, draw_depth[k])?;
             } else {
-                self.ensure_pipeline(meta, NONE, false)?;
+                self.ensure_pipeline(meta, NONE, false, draw_depth[k])?;
             }
             ranges.push(range);
             self.check_assets(d)?;
@@ -184,7 +185,16 @@ impl Gpu {
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: depths[gi].as_ref().map(|view| {
+                    wgpu::RenderPassDepthStencilAttachment {
+                        view,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
@@ -204,7 +214,7 @@ impl Gpu {
                             Some(Some(Loaded::Mesh(m))) => Some(m),
                             _ => None,
                         };
-                        pass.set_pipeline(&self.pipelines[&(d.column, mesh.is_some())]);
+                        pass.set_pipeline(&self.pipelines[&(d.column, mesh.is_some(), group.depth)]);
                         pass.set_bind_group(0, &binds[k], &[slot]);
                         let (a, b) = ranges[k];
                         pass.set_vertex_buffer(0, self.instances.slice(a..b));
@@ -222,7 +232,7 @@ impl Gpu {
                     // Three vertices and no buffer: the shader builds the
                     // triangle. Clears, blits and post are this.
                     DRAW_FULLSCREEN => {
-                        pass.set_pipeline(&self.pipelines[&(NONE, false)]);
+                        pass.set_pipeline(&self.pipelines[&(NONE, false, group.depth)]);
                         pass.set_bind_group(0, &binds[k], &[slot]);
                         pass.draw(0..3, 0..1);
                     }

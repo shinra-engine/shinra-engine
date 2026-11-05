@@ -18,6 +18,9 @@ pub const DRAW_FULLSCREEN: u32 = 2;
 pub const END_PASS: u32 = 3;
 /// No mesh / no texture / no column.
 pub const NONE: u32 = u32::MAX;
+/// `BEGIN_PASS.render_flags` bit 0: attach a `Depth32Float` buffer to this
+/// pass, cleared to 1.0, compare `Less`, write on for instanced draws.
+pub const FLAG_DEPTH: u32 = 1;
 
 /// `render::command`, as this engine reads it.
 const COMMAND_FIELDS: [(&str, u32); 16] = [
@@ -66,7 +69,8 @@ pub struct Command {
     /// Target id to sample from an earlier pass this frame, or 0 for none.
     /// Not yet acted on by replay.
     pub sample: u32,
-    /// Reserved.
+    /// Bit 0 (`FLAG_DEPTH`) requests a depth attachment for this pass; see
+    /// `FLAG_DEPTH`. Other bits reserved.
     pub render_flags: u32,
 }
 

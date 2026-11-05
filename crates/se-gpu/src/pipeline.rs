@@ -24,6 +24,12 @@ fn vertex_format(ty: Ty) -> Result<wgpu::VertexFormat> {
 }
 
 /// `column == NONE` builds the fullscreen variant: no vertex buffers at all.
+///
+/// `depth` attaches a `Depth32Float` state matching the pass's depth
+/// attachment (see `replay.rs`). A fullscreen pipeline (`column == NONE`)
+/// built with `depth` neither tests nor writes it (compare `Always`, write
+/// off), so compositing is never occluded by, or occludes, the geometry it
+/// composites; every other pipeline compares `Less` with write on.
 pub(crate) fn build(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -32,6 +38,7 @@ pub(crate) fn build(
     column: u32,
     with_mesh: bool,
     format: wgpu::TextureFormat,
+    depth: bool,
 ) -> Result<wgpu::RenderPipeline> {
     let mesh_attrs = [
         wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 14 },
@@ -88,7 +95,20 @@ pub(crate) fn build(
             })],
         }),
         primitive: Default::default(),
-        depth_stencil: None,
+        depth_stencil: depth.then(|| {
+            let fullscreen = column == NONE;
+            wgpu::DepthStencilState {
+                format: crate::DEPTH_FORMAT,
+                depth_write_enabled: !fullscreen,
+                depth_compare: if fullscreen {
+                    wgpu::CompareFunction::Always
+                } else {
+                    wgpu::CompareFunction::Less
+                },
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }
+        }),
         multisample: Default::default(),
         multiview: None,
         cache: None,

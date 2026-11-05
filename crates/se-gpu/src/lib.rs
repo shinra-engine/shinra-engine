@@ -55,10 +55,18 @@ pub struct Gpu {
     /// Offscreen targets 1..=8, created the first time a command names them
     /// and dropped wholesale by `resize()` so a stale size is never read.
     offscreen: HashMap<u32, Offscreen>,
+    /// One `Depth32Float` view per target id (0 = present, 1..=8 offscreen),
+    /// created the first time a depth-flagged pass names that target and
+    /// dropped wholesale by `resize()` alongside `offscreen`, so a stale size
+    /// is never read.
+    depth: HashMap<u32, wgpu::TextureView>,
     module: wgpu::ShaderModule,
     pipe_layout: wgpu::PipelineLayout,
-    /// Keyed by (instance column, has-mesh); filled on first use.
-    pipelines: HashMap<(u32, bool), wgpu::RenderPipeline>,
+    /// Keyed by (instance column, has-mesh, depth-attached); filled on first
+    /// use. Depth varies the key because the same column may be drawn both
+    /// inside and outside a depth-flagged pass, and those need different
+    /// pipeline state.
+    pipelines: HashMap<(u32, bool, bool), wgpu::RenderPipeline>,
     bind_layout: wgpu::BindGroupLayout,
     uniform: wgpu::Buffer,
     instances: wgpu::Buffer,
@@ -85,6 +93,7 @@ pub const UNIFORM_BYTES: u32 = 256;
 pub const GPU_BUDGET: Duration = Duration::from_secs(2);
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Gpu {
     /// `shader` is `contract.wgsl` followed by the module's own `se.wgsl`, so
@@ -190,6 +199,7 @@ impl Gpu {
             adapter_name,
             target: Target { width, height, row_bytes, texture, view, readback },
             offscreen: HashMap::new(),
+            depth: HashMap::new(),
             module,
             pipe_layout: layout,
             pipelines: HashMap::new(),
@@ -203,9 +213,16 @@ impl Gpu {
         })
     }
 
-    /// The pipeline for a draw of `column`, built on first use.
-    pub(crate) fn ensure_pipeline(&mut self, meta: &Meta, column: u32, with_mesh: bool) -> Result<()> {
-        if !self.pipelines.contains_key(&(column, with_mesh)) {
+    /// The pipeline for a draw of `column` in a pass with the given depth
+    /// flag, built on first use.
+    pub(crate) fn ensure_pipeline(
+        &mut self,
+        meta: &Meta,
+        column: u32,
+        with_mesh: bool,
+        depth: bool,
+    ) -> Result<()> {
+        if !self.pipelines.contains_key(&(column, with_mesh, depth)) {
             let p = pipeline::build(
                 &self.device,
                 &self.pipe_layout,
@@ -214,8 +231,9 @@ impl Gpu {
                 column,
                 with_mesh,
                 FORMAT,
+                depth,
             )?;
-            self.pipelines.insert((column, with_mesh), p);
+            self.pipelines.insert((column, with_mesh, depth), p);
         }
         Ok(())
     }
@@ -267,6 +285,7 @@ impl Gpu {
         // A cached offscreen target's size follows the present target's size
         // at the time it was created; a stale one must never be read back.
         self.offscreen.clear();
+        self.depth.clear();
     }
 
     fn make_texture(
@@ -308,6 +327,35 @@ impl Gpu {
             self.offscreen.insert(id, Offscreen { width, height, view });
         }
         &self.offscreen[&id].view
+    }
+
+    /// Resolve a target id to its depth view, created lazily the first time a
+    /// depth-flagged pass names that target, sized to the target's current
+    /// dimensions. Call only after `target_view(id)` has resolved that same
+    /// id this frame, so an offscreen target's size is already known.
+    /// `resize()` drops every depth view alongside `offscreen`.
+    pub(crate) fn depth_view(&mut self, id: u32) -> &wgpu::TextureView {
+        if !self.depth.contains_key(&id) {
+            let (width, height) = if id == 0 {
+                (self.target.width, self.target.height)
+            } else {
+                let o = &self.offscreen[&id];
+                (o.width, o.height)
+            };
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("depth"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: DEPTH_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            self.depth.insert(id, view);
+        }
+        &self.depth[&id]
     }
 }
 
