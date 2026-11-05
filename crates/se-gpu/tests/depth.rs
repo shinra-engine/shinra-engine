@@ -1,6 +1,8 @@
 //! `BEGIN_PASS.render_flags` bit 0 (`FLAG_DEPTH`): depth, not row or draw
 //! order, decides which of two overlapping instanced rows wins, and a
 //! `DRAW_FULLSCREEN` inside the same kind of pass ignores depth entirely.
+//! `FLAG_DEPTH` is opt-in: a pass that never sets it keeps the original,
+//! pre-fix behavior, where the last-drawn row wins regardless of distance.
 //! See `pipeline.rs::build` and `replay.rs::replay_inner`.
 
 use anyhow::Result;
@@ -130,6 +132,44 @@ fn depth_decides_which_overlapping_instance_wins_not_row_order() -> Result<()> {
             assert!(
                 near(p, [255, 0, 26, 255]),
                 "the nearer (red) row must win regardless of row order, got {p:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The negative case for the test above: with `render_flags` left at 0 (no
+/// `FLAG_DEPTH`), draw order — which row rasterizes last — decides the
+/// winner, not distance. This is the exact pre-fix defect the story
+/// describes, kept as a standing regression check that the flag is truly
+/// opt-in rather than always-on.
+#[test]
+fn without_flag_depth_the_last_drawn_row_wins_not_distance() -> Result<()> {
+    let near_row = [1.0, 0.0, 0.1]; // red, z=0.1 (nearer)
+    let far_row = [0.0, 1.0, 0.9]; // green, z=0.9 (farther)
+
+    // In both orderings, row 1 (the second, later-drawn instance) must win,
+    // regardless of whether it is actually the nearer or the farther row.
+    let cases = [
+        ([near_row, far_row], [0, 255, 230, 255]),
+        ([far_row, near_row], [255, 0, 26, 255]),
+    ];
+    for (rows, row1_wins) in cases {
+        let mut r = rig()?;
+        seed_pos(&mut r, rows)?;
+        let draw = Command {
+            kind: DRAW_INSTANCED,
+            column: r.column,
+            count: 2,
+            vertices: 3,
+            ..cmd(0)
+        };
+        r.gpu.replay(&r.vm.meta, &r.vm.world, r.vm.bytes(), &[cmd(BEGIN_PASS), draw, cmd(END_PASS)])?;
+        let px = r.gpu.pixels()?;
+        for p in px.chunks(4) {
+            assert!(
+                near(p, row1_wins),
+                "without FLAG_DEPTH, the last-drawn row (row 1) must win regardless of distance, got {p:?}"
             );
         }
     }
