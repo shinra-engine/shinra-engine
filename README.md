@@ -294,9 +294,10 @@ never opens a window. `docker compose run ide` uses an image with it installed;
 
 ## Known limits
 
-- **One pass.** `command.shader` and `frame.present` are reserved: the replayer
-  does not yet switch shaders or present a pass's output to another. Multi-pass V
-  is the next piece of work.
+- **One pass.** `command.shader`, `frame.present`, and `command`'s `target`/
+  `sample`/`render-flags` fields are reserved: the replayer does not yet switch
+  shaders, present a pass's output to another, draw to an offscreen target, or
+  sample an earlier pass. Multi-pass V is the next piece of work.
 - **Pair stages are brute force O(n·m).** A pair stage visits every pair inside
   the module; there is no broadphase.
 - **The aspect ratio is a constant** in the shaders until the viewport is a
