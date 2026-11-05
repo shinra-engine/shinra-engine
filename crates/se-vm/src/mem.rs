@@ -6,6 +6,7 @@
 //! driving `WebAssembly.Memory` instead of wasmtime) implement the same
 //! three operations later without `World`/`Vm` changing at all.
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 
 use anyhow::Result;
