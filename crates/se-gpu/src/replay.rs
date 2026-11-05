@@ -10,7 +10,7 @@ use crate::resources::Loaded;
 use crate::{Gpu, GPU_BUDGET, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// What one replayed frame did, so a caller can assert on it without reading
 /// pixels back.
@@ -314,7 +314,7 @@ impl Gpu {
     /// both.
     pub fn pixels(&self) -> Result<Vec<u8>> {
         let start = Instant::now();
-        let result = self.pixels_inner();
+        let result = self.pixels_with_budget(GPU_BUDGET);
         self.last_cost.set(self.last_cost.get() + start.elapsed());
         result
     }
@@ -326,18 +326,22 @@ impl Gpu {
         self.last_cost.get()
     }
 
-    fn pixels_inner(&self) -> Result<Vec<u8>> {
+    /// `pixels()`'s body, with the wall-clock budget as a parameter. A test
+    /// can pass `Duration::ZERO` to force `wgpu::PollError::Timeout`
+    /// deterministically — a submission just queued cannot be seen complete
+    /// in a zero-length wait — without blocking for the real `GPU_BUDGET`.
+    pub fn pixels_with_budget(&self, budget: Duration) -> Result<Vec<u8>> {
         let slice = self.target.readback.slice(..);
         slice.map_async(wgpu::MapMode::Read, |_| {});
         self.device
             .poll(wgpu::PollType::Wait {
                 submission_index: None,
-                timeout: Some(GPU_BUDGET),
+                timeout: Some(budget),
             })
             .map_err(|e| {
                 if matches!(e, wgpu::PollError::Timeout) {
                     anyhow::Error::new(e)
-                        .context(format!("GPU replay exceeded its {GPU_BUDGET:?} budget"))
+                        .context(format!("GPU replay exceeded its {budget:?} budget"))
                 } else {
                     e.into()
                 }

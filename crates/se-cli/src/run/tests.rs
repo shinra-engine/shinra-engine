@@ -65,3 +65,154 @@ fn advance_steps_carries_a_partial_step_to_the_next_call() {
     let (steps2, _) = advance_steps(acc, 0.0);
     assert_eq!(steps2, 0, "half a step held over should not round up on its own");
 }
+
+/// `handle_replay_err`: a GPU timeout rolls the render slot back to the
+/// module that last produced a picture; anything else is left to the
+/// existing generic `replay:` note. The `Err` is built directly — the branch
+/// under test only ever downcasts it, so no real GPU call is needed to drive
+/// it, only a real `Vm` with two loaded render modules to prove `Vm::load`
+/// actually ran.
+mod replay_err {
+    use super::*;
+    use crate::live::Live;
+    use se_vm::memory::STACK_SIZE;
+    use se_vm::Vm;
+    use std::path::{Path, PathBuf};
+    use std::process::Command as Proc;
+
+    fn has_wasm_target() -> bool {
+        let Ok(o) =
+            Proc::new("rustc").args(["--print", "target-libdir", "--target", "wasm32-unknown-unknown"]).output()
+        else {
+            return false;
+        };
+        o.status.success() && Path::new(String::from_utf8_lossy(&o.stdout).trim()).is_dir()
+    }
+
+    const PRELUDE: &str = concat!(
+        "#![no_std]\n",
+        "#[panic_handler]\n",
+        "fn panic(_: &core::panic::PanicInfo) -> ! { core::arch::wasm32::unreachable() }\n",
+        "include!(\"contract.rs\");\n",
+        "#[used]\n#[link_section = \"se.contract-id\"]\npub static SE_CONTRACT_ID: [u8; 8] = CONTRACT_ID.to_le_bytes();\n",
+    );
+
+    const RECORD_ONLY: &str = r#"
+#[no_mangle]
+pub extern "C" fn record() -> u32 {
+    unsafe {
+        let f = &mut *(arena::FRAME as *mut Frame);
+        f.commands = arena::COMMANDS;
+        f.count = 0;
+        f.present = 0;
+        f.epoch = f.epoch.wrapping_add(1);
+        0
+    }
+}
+"#;
+
+    const SHADER: &str = r#"@group(0) @binding(0) var<uniform> cam: Camera;
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32, inst: TransformInstance) -> @builtin(position) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+}
+@fragment
+fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(cam.fov, 0.0, 0.0, 1.0); }
+"#;
+
+    /// One directory and crate name per module: both render modules share a
+    /// `--global-base` and would otherwise collide under rustc's defaults.
+    fn build_render(dir: &Path, name: &str) -> anyhow::Result<Vec<u8>> {
+        let file = dir.join(format!("{name}.rs"));
+        std::fs::write(&file, format!("{PRELUDE}{RECORD_ONLY}"))?;
+        let out = dir.join(format!("{name}.wasm"));
+        let o = Proc::new("rustc")
+            .args(["--edition", "2021", "--target", "wasm32-unknown-unknown"])
+            .args(["--crate-type", "cdylib", "--crate-name", name])
+            .arg("-C").arg("link-arg=--import-memory")
+            .arg("-C").arg(format!("link-arg=--global-base={}", Slot::Render.global_base()))
+            .arg("-C").arg(format!("link-arg=-zstack-size={STACK_SIZE}"))
+            .arg("-C").arg("opt-level=1")
+            .arg("-C").arg("panic=abort")
+            .arg("-o").arg(&out)
+            .arg(&file)
+            .output()?;
+        anyhow::ensure!(o.status.success(), "building {name}:\n{}", String::from_utf8_lossy(&o.stderr));
+        Ok(std::fs::read(out)?)
+    }
+
+    /// A `Live` with `render_good` as the cached last-good module and
+    /// `render_bad` as the one currently in the `Render` slot — the state a
+    /// GPU timeout would find mid-game.
+    fn rig(tag: &str) -> anyhow::Result<Live> {
+        let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
+        let g = se_contract::generate(&wit)?;
+        let dir = std::env::temp_dir().join(format!("se-cli-replay-err-{tag}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("contract.rs"), &g.rust)?;
+
+        let mut vm = Vm::new(&g.module, 16)?;
+        let good = build_render(&dir, "render_good")?;
+        vm.load(Slot::Render, "render_good", good.clone())?;
+        let bad = build_render(&dir, "render_bad")?;
+        vm.load(Slot::Render, "render_bad", bad)?;
+
+        let gpu = se_gpu::Gpu::new(&vm.meta, &format!("{}\n{SHADER}", g.wgsl), 4, 4)?;
+        Ok(Live { vm, gpu, last_good_render: Some(("render_good".to_string(), good)) })
+    }
+
+    fn render_name(live: &Live) -> Option<&str> {
+        live.vm.module(Slot::Render).map(|m| m.name.as_str())
+    }
+
+    #[test]
+    fn a_timeout_reloads_the_last_good_render_module_and_notes_rollback() -> anyhow::Result<()> {
+        if !has_wasm_target() {
+            eprintln!("skipped: wasm32-unknown-unknown is not installed");
+            return Ok(());
+        }
+        let mut live = rig("timeout")?;
+        assert_eq!(render_name(&live), Some("render_bad"));
+
+        let mut ide = se_tui::Ide::default();
+        let before = ide.log.len();
+        let e = anyhow::Error::new(PollError::Timeout).context("GPU replay exceeded its 2s budget");
+        handle_replay_err(&mut live, &mut ide, e);
+
+        assert_eq!(
+            render_name(&live),
+            Some("render_good"),
+            "a GPU timeout reloads the module that last produced a picture"
+        );
+        let notes: Vec<&str> = ide.log.iter().skip(before).map(|l| l.text.as_str()).collect();
+        assert!(
+            notes.contains(&"rolled back render: the previous module is running"),
+            "{notes:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_non_timeout_error_leaves_the_render_slot_alone() -> anyhow::Result<()> {
+        if !has_wasm_target() {
+            eprintln!("skipped: wasm32-unknown-unknown is not installed");
+            return Ok(());
+        }
+        let mut live = rig("other")?;
+
+        let mut ide = se_tui::Ide::default();
+        let before = ide.log.len();
+        let e = anyhow::anyhow!("render.wasm recorded command kind 9, which this host has no rule for");
+        handle_replay_err(&mut live, &mut ide, e);
+
+        assert_eq!(
+            render_name(&live),
+            Some("render_bad"),
+            "a non-timeout replay error must not touch the render slot"
+        );
+        let notes: Vec<&str> = ide.log.iter().skip(before).map(|l| l.text.as_str()).collect();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].starts_with("replay: "), "{notes:?}");
+        Ok(())
+    }
+}
