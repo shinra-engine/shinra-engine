@@ -10,6 +10,8 @@ use crate::resources::Loaded;
 use crate::{Gpu, GPU_BUDGET, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
+<<<<<<< HEAD
+use std::ops::Range;
 use std::time::{Duration, Instant};
 
 /// What one replayed frame did, so a caller can assert on it without reading
@@ -27,6 +29,53 @@ pub struct Report {
 fn u32_at(m: &[u8], at: u32) -> u32 {
     let a = at as usize;
     u32::from_le_bytes([m[a], m[a + 1], m[a + 2], m[a + 3]])
+}
+
+/// One `BEGIN_PASS..END_PASS` run: the target and clear it names, and the
+/// slice of the frame's draws (indices into the frame-wide, in-order draw
+/// list) it owns. A pass's draws are always contiguous in command order, so a
+/// half-open range into that one list is enough to say which are its own.
+struct PassGroup {
+    target: u32,
+    clear: [f32; 4],
+    draws: Range<usize>,
+}
+
+/// Splits a frame's commands into one group per pass plus the frame-wide, in
+/// command order, draw list every group's range indexes into. A draw outside
+/// any open pass, or a `BEGIN_PASS` before the previous one's `END_PASS`, is
+/// refused rather than silently merged into the wrong pass.
+fn group_passes(cmds: &[Command]) -> Result<(Vec<PassGroup>, Vec<&Command>)> {
+    let mut groups: Vec<PassGroup> = Vec::new();
+    let mut draws: Vec<&Command> = Vec::new();
+    let mut open = false;
+    for c in cmds {
+        match c.kind {
+            BEGIN_PASS => {
+                if open {
+                    bail!("a pass began before the previous one's END_PASS")
+                }
+                open = true;
+                groups.push(PassGroup {
+                    target: c.target,
+                    clear: c.clear,
+                    draws: draws.len()..draws.len(),
+                });
+            }
+            DRAW_INSTANCED | DRAW_FULLSCREEN => {
+                if !open {
+                    bail!("a draw was recorded outside any open pass")
+                }
+                draws.push(c);
+                groups.last_mut().unwrap().draws.end = draws.len();
+            }
+            END_PASS => open = false,
+            k => {
+                bail!("render.wasm recorded command kind {k}, which this host has no rule for")
+            }
+        }
+    }
+    Ok((groups, draws))
 }
 
 impl Gpu {
@@ -57,36 +106,12 @@ impl Gpu {
         cmds: &[Command],
     ) -> Result<Report> {
         let mut report = Report::default();
-        let mut clear = wgpu::Color {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 1.0,
-        };
-        let mut draws: Vec<&Command> = Vec::new();
-
-        for c in cmds {
-            match c.kind {
-                BEGIN_PASS => {
-                    report.passes += 1;
-                    report.clear = c.clear;
-                    clear = wgpu::Color {
-                        r: c.clear[0] as f64,
-                        g: c.clear[1] as f64,
-                        b: c.clear[2] as f64,
-                        a: c.clear[3] as f64,
-                    };
-                }
-                DRAW_INSTANCED | DRAW_FULLSCREEN => draws.push(c),
-                END_PASS => {}
-                k => {
-                    bail!("render.wasm recorded command kind {k}, which this host has no rule for")
-                }
-            }
-        }
-        if report.passes == 0 {
+        let (groups, draws) = group_passes(cmds)?;
+        if groups.is_empty() {
             bail!("the recorded frame opens no pass")
         }
+        report.passes = groups.len();
+        report.clear = groups.last().expect("non-empty").clear;
 
         if draws.len() > UNIFORM_SLOTS as usize {
             bail!(
@@ -94,6 +119,15 @@ impl Gpu {
                 draws.len()
             )
         }
+
+        // Resolve every pass's target view before any further borrow of
+        // `self`: `target_view` takes `&mut self` (it may lazily create an
+        // offscreen texture), and a render pass below borrows `self`
+        // immutably (pipelines, instance buffer) for as long as it is open.
+        let views: Vec<wgpu::TextureView> = groups
+            .iter()
+            .map(|g| self.target_view(g.target).clone())
+            .collect();
 
         // Uploads first: a render pass borrows the encoder, and a column is
         // read straight out of the arena. Each draw gets its own bytes.
@@ -170,11 +204,17 @@ impl Gpu {
         let binds: Vec<wgpu::BindGroup> = draws.iter().map(|d| self.bind_for(d)).collect();
 
         let mut enc = self.device.create_command_encoder(&Default::default());
-        {
+        for (gi, group) in groups.iter().enumerate() {
+            let clear = wgpu::Color {
+                r: group.clear[0] as f64,
+                g: group.clear[1] as f64,
+                b: group.clear[2] as f64,
+                a: group.clear[3] as f64,
+            };
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.target.view,
+                    view: &views[gi],
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
@@ -186,7 +226,8 @@ impl Gpu {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            for (k, d) in draws.iter().enumerate() {
+            for k in group.draws.clone() {
+                let d = draws[k];
                 let slot = k as u32 * UNIFORM_BYTES;
                 match d.kind {
                     DRAW_INSTANCED => {

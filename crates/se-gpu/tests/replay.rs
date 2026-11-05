@@ -251,6 +251,72 @@ fn two_draws_of_different_counts_both_land() -> Result<()> {
 }
 
 #[test]
+fn a_draw_outside_any_pass_is_refused() -> Result<()> {
+    let mut r = rig()?;
+    let d = draw(&r, 1, 0, 0);
+    refused(&mut r, &[d], "outside any open pass");
+    Ok(())
+}
+
+#[test]
+fn a_draw_after_end_pass_is_refused() -> Result<()> {
+    let mut r = rig()?;
+    let d = draw(&r, 1, 0, 0);
+    refused(
+        &mut r,
+        &[cmd(BEGIN_PASS), cmd(END_PASS), d],
+        "outside any open pass",
+    );
+    Ok(())
+}
+
+#[test]
+fn a_nested_begin_pass_is_refused() -> Result<()> {
+    let mut r = rig()?;
+    refused(
+        &mut r,
+        &[cmd(BEGIN_PASS), cmd(BEGIN_PASS)],
+        "before the previous one's END_PASS",
+    );
+    Ok(())
+}
+
+#[test]
+fn two_passes_draw_into_separate_targets() -> Result<()> {
+    let mut r = rig()?;
+    seed(&mut r, &[0.0])?;
+    let pass1 = Command {
+        target: 1,
+        clear: [1.0, 0.0, 0.0, 1.0],
+        ..cmd(BEGIN_PASS)
+    };
+    let pass2 = Command {
+        target: 0,
+        clear: [0.0, 0.0, 1.0, 1.0],
+        ..cmd(BEGIN_PASS)
+    };
+    let d1 = draw(&r, 1, 0, 0);
+    let d2 = draw(&r, 1, 0, 0);
+    let report = replay(
+        &mut r,
+        &[pass1, d1, cmd(END_PASS), pass2, d2, cmd(END_PASS)],
+    )?;
+    assert_eq!(report.passes, 2);
+    assert_eq!(report.draws, 2);
+
+    let px = r.gpu.pixels()?;
+    // A background pixel never touched by the triangle must be exactly pass
+    // 2's clear colour — pass 1 drew to an offscreen target nothing samples,
+    // so it must never reach the present readback.
+    assert_eq!(
+        &px[0..4],
+        &[0, 0, 255, 255],
+        "present background must be pass 2's clear, not pass 1's"
+    );
+    Ok(())
+}
+
+#[test]
 fn draws_do_not_share_a_uniform_slot() -> Result<()> {
     let mut r = rig()?;
     seed(&mut r, &[-0.5, 0.5])?;
