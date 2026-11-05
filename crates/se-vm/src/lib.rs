@@ -15,6 +15,8 @@ pub mod input;
 pub mod memory;
 pub mod save;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod mem;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod module;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod stages;

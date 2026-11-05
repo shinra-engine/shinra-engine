@@ -15,6 +15,7 @@
 //! between any two frames.
 
 use crate::clock;
+use crate::mem::native::NativeMem;
 use crate::memory::{required_pages, Slot};
 use crate::module::{self, with_budget, Loaded};
 use crate::rollback::Staged;
@@ -65,7 +66,10 @@ impl Vm {
         let memory = Memory::new(&mut store, MemoryType::new(pages, Some(pages)))
             .with_context(|| format!("reserving {pages} pages"))?;
 
-        let world = World::place(&meta, &memory, &mut store, rows)?;
+        let world = {
+            let mut mem = NativeMem { memory, store: &mut store };
+            World::place(&meta, &mut mem, rows)?
+        };
         Ok(Vm {
             engine,
             store,
@@ -183,7 +187,10 @@ impl Vm {
         // length; the host is what keeps that honest against the capacity it
         // placed. This is the whole of what used to be spawn and despawn.
         for p in 0..self.world.pool_cap.len() as u32 {
-            let asked = self.world.len_of(&self.meta, &self.memory, &self.store, p)?;
+            let asked = {
+                let mem = NativeMem { memory: self.memory, store: &mut self.store };
+                self.world.len_of(&self.meta, &mem, p)?
+            };
             let cap = self.world.pool_cap[p as usize];
             if asked > cap {
                 self.set_len(p, cap)?;
@@ -224,7 +231,8 @@ impl Vm {
     /// Copy an asset's bytes into the blob region and publish its span.
     /// Variable length lives there; the record that names it does not grow.
     pub fn put_blob(&mut self, slot: u32, payload: &[u8]) -> Result<(u32, u32)> {
-        self.world.put_blob(&self.meta, &self.memory, &mut self.store, slot, payload)
+        let mut mem = NativeMem { memory: self.memory, store: &mut self.store };
+        self.world.put_blob(&self.meta, &mut mem, slot, payload)
     }
 
     pub fn put_str(&mut self, slot: u32, s: &str) -> Result<(u32, u32)> {
@@ -267,7 +275,8 @@ impl Vm {
     /// Ask for a pool to hold `len` rows. Nothing spawns: a control var asks,
     /// and the host answers by moving one number.
     pub fn set_len(&mut self, pool: u32, len: u32) -> Result<()> {
-        self.world.set_len(&self.meta, &self.memory, &mut self.store, pool, len)
+        let mut mem = NativeMem { memory: self.memory, store: &mut self.store };
+        self.world.set_len(&self.meta, &mut mem, pool, len)
     }
 
     /// The whole arena, byte for byte. A save file is this and nothing else —
@@ -305,8 +314,8 @@ impl Vm {
         self.restore(payload)?;
         self.world.blob_top = end as u32;
         for p in 0..self.world.pool_len.len() as u32 {
-            self.world.pool_len[p as usize] =
-                self.world.len_of(&self.meta, &self.memory, &self.store, p)?;
+            let mem = NativeMem { memory: self.memory, store: &mut self.store };
+            self.world.pool_len[p as usize] = self.world.len_of(&self.meta, &mem, p)?;
         }
         Ok(h.frame)
     }

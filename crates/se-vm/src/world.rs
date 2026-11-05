@@ -9,10 +9,10 @@
 //! module reads `column.base` each frame, which is what lets the host grow or
 //! move a column with nothing rebuilt.
 
+use crate::mem::Mem;
 use crate::memory;
 use anyhow::{bail, Context, Result};
 use se_contract::read::Table;
-use wasmtime::{Memory, Store};
 
 /// `handles::column` as this engine requires it. The contract declares it, so
 /// the declaration is checked rather than assumed — a game that spelled it
@@ -148,15 +148,13 @@ pub struct World {
     pub blob_cap: Vec<u32>,
 }
 
-fn w32(mem: &Memory, store: &mut Store<()>, at: u32, v: u32) -> Result<()> {
-    mem.write(store, at as usize, &v.to_le_bytes())?;
-    Ok(())
+fn w32(mem: &mut dyn Mem, at: u32, v: u32) -> Result<()> {
+    mem.write(at, &v.to_le_bytes())
 }
 
-fn r32(mem: &Memory, store: &Store<()>, at: u32) -> Result<u32> {
-    let mut b = [0u8; 4];
-    mem.read(store, at as usize, &mut b)?;
-    Ok(u32::from_le_bytes(b))
+fn r32(mem: &dyn Mem, at: u32) -> Result<u32> {
+    let b = mem.read(at, 4)?;
+    Ok(u32::from_le_bytes(b.try_into().expect("read returns the length asked")))
 }
 
 impl World {
@@ -164,7 +162,7 @@ impl World {
     ///
     /// `cap` is rows per pool. One number for now: a pool is homogeneous by
     /// construction, so its columns cannot want different capacities.
-    pub fn place(m: &Meta, mem: &Memory, store: &mut Store<()>, cap: u32) -> Result<World> {
+    pub fn place(m: &Meta, mem: &mut dyn Mem, cap: u32) -> Result<World> {
         let comps = &m.components;
         let pools = &m.pools;
         if pools.is_empty() {
@@ -209,16 +207,16 @@ impl World {
             base.push(at);
             stride.push(r.size);
             let d = m.columns_at + i as u32 * COLUMN_BYTES;
-            w32(mem, store, d, at)?;
-            w32(mem, store, d + 4, cap)?;
-            w32(mem, store, d + 8, r.size)?;
-            w32(mem, store, d + 12, pool_of[i])?;
+            w32(mem, d, at)?;
+            w32(mem, d + 4, cap)?;
+            w32(mem, d + 8, r.size)?;
+            w32(mem, d + 12, pool_of[i])?;
             at += bytes[i];
         }
         for pi in 0..pools.len() as u32 {
             let d = m.pools_at + pi * POOL_BYTES;
-            w32(mem, store, d, 0)?;
-            w32(mem, store, d + 4, cap)?;
+            w32(mem, d, 0)?;
+            w32(mem, d + 4, cap)?;
         }
 
         Ok(World {
@@ -234,26 +232,19 @@ impl World {
 
     /// Set a pool's length — the only thing that changes how many rows exist.
     /// A control var asks for it; nothing spawns.
-    pub fn set_len(
-        &mut self,
-        m: &Meta,
-        mem: &Memory,
-        store: &mut Store<()>,
-        pool: u32,
-        len: u32,
-    ) -> Result<()> {
+    pub fn set_len(&mut self, m: &Meta, mem: &mut dyn Mem, pool: u32, len: u32) -> Result<()> {
         let i = pool as usize;
         let Some(cap) = self.pool_cap.get(i).copied() else {
             bail!("no pool {pool}")
         };
         let len = len.min(cap);
-        w32(mem, store, m.pools_at + pool * POOL_BYTES, len)?;
+        w32(mem, m.pools_at + pool * POOL_BYTES, len)?;
         self.pool_len[i] = len;
         Ok(())
     }
 
-    pub fn len_of(&self, m: &Meta, mem: &Memory, store: &Store<()>, pool: u32) -> Result<u32> {
-        r32(mem, store, m.pools_at + pool * POOL_BYTES)
+    pub fn len_of(&self, m: &Meta, mem: &dyn Mem, pool: u32) -> Result<u32> {
+        r32(mem, m.pools_at + pool * POOL_BYTES)
     }
 
     /// Copy bytes into a blob region and publish the span. Variable length
@@ -261,8 +252,7 @@ impl World {
     pub fn put_blob(
         &mut self,
         m: &Meta,
-        mem: &Memory,
-        store: &mut Store<()>,
+        mem: &mut dyn Mem,
         slot: u32,
         payload: &[u8],
     ) -> Result<(u32, u32)> {
@@ -271,7 +261,7 @@ impl World {
         }
         let len = payload.len() as u32;
         let d = m.blobs_at + slot * SPAN_BYTES;
-        let old = r32(mem, store, d)?;
+        let old = r32(mem, d)?;
         let at = if len <= self.blob_cap[slot as usize] {
             old
         } else {
@@ -281,9 +271,9 @@ impl World {
             self.blob_cap[slot as usize] = len;
             at
         };
-        mem.write(&mut *store, at as usize, payload)?;
-        w32(mem, store, d, at)?;
-        w32(mem, store, d + 4, len)?;
+        mem.write(at, payload)?;
+        w32(mem, d, at)?;
+        w32(mem, d + 4, len)?;
         Ok((at, len))
     }
 
