@@ -16,16 +16,10 @@ pub mod mem;
 pub mod memory;
 pub mod module;
 pub mod save;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod stages;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod world;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod control;
-#[cfg(not(target_arch = "wasm32"))]
 mod rollback;
-#[cfg(not(target_arch = "wasm32"))]
 mod vm;
-#[cfg(not(target_arch = "wasm32"))]
 pub use vm::Vm;

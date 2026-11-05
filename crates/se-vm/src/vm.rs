@@ -13,23 +13,50 @@
 //! Everything they read and everything they write is in the arena, at
 //! addresses the contract fixed — which is why a module can be replaced
 //! between any two frames.
+//!
+//! Native and wasm32 share this one struct and its public API: a single
+//! field declaration cannot name a type valid on both targets, since
+//! `wasmtime::Memory`/`Store` do not exist on wasm32 at all. So the fields
+//! below are `cfg`-gated per target, and so are the methods that construct
+//! or hold a `Mem` impl — native's body is unchanged; wasm32's is in
+//! `vm/web.rs` (story-229 T-d, Target Invariant 2).
 
-use crate::clock;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::mem::native::NativeMem;
-use crate::memory::{required_pages, Slot};
-use crate::module::{self, with_budget, Loaded};
+#[cfg(target_arch = "wasm32")]
+use crate::mem::web::WebMem;
+use crate::clock;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::memory::required_pages;
+use crate::memory::Slot;
+#[cfg(not(target_arch = "wasm32"))]
+use crate::module::with_budget;
+use crate::module::{self, Loaded};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::module::Prepared;
 use crate::rollback::Staged;
 use crate::save;
 use crate::stages::{self, Stage};
 use crate::world::{Meta, World, SPAN_BYTES};
 use anyhow::{bail, Context, Result};
+#[cfg(not(target_arch = "wasm32"))]
 use se_contract::read::Table;
+#[cfg(not(target_arch = "wasm32"))]
 use wasmtime::{Config, Engine, Memory, MemoryType, Store};
 
+#[cfg(target_arch = "wasm32")]
+mod web;
+
 pub struct Vm {
+    #[cfg(not(target_arch = "wasm32"))]
     pub engine: Engine,
+    #[cfg(not(target_arch = "wasm32"))]
     pub store: Store<()>,
+    #[cfg(not(target_arch = "wasm32"))]
     pub memory: Memory,
+    /// The wasm32 arena: a browser-owned `WebAssembly.Memory` behind `Mem`.
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) mem: WebMem,
     pub meta: Meta,
     pub world: World,
     pub(crate) game: Option<Loaded>,
@@ -51,6 +78,7 @@ pub struct Vm {
 
 impl Vm {
     /// Stand up a memory and place the world the contract describes.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(contract_wasm: &[u8], rows: u32) -> Result<Vm> {
         let table_bytes = se_contract::wasm::section(contract_wasm, se_contract::table::SECTION)
             .context("contract.wasm carries no se.contract section")?;
@@ -87,6 +115,18 @@ impl Vm {
         })
     }
 
+    /// Compile and check a module's bytes; a refusal here changes nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn prepare_module(&self, slot: Slot, name: &str, bytes: Vec<u8>) -> Result<Prepared> {
+        Loaded::prepare(&self.engine, slot, name, bytes, self.contract_id)
+    }
+
+    /// Instantiate a prepared module against this VM's shared memory.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn commit_module(&mut self, p: Prepared) -> Result<Loaded> {
+        Loaded::commit(p, &mut self.store, self.memory)
+    }
+
     /// The fingerprint of the contract this world was placed from.
     pub fn contract_id(&self) -> u64 { self.contract_id }
 
@@ -101,9 +141,9 @@ impl Vm {
     /// statics land on the same `--global-base` as the old one's, and the
     /// world is not in either of them.
     pub fn load(&mut self, slot: Slot, name: &str, bytes: Vec<u8>) -> Result<()> {
-        let p = Loaded::prepare(&self.engine, slot, name, bytes, self.contract_id)?;
+        let p = self.prepare_module(slot, name, bytes)?;
         if slot != Slot::Process {
-            let m = Loaded::commit(p, &mut self.store, self.memory)?;
+            let m = self.commit_module(p)?;
             let prev = self.slot_mut(slot).replace(m);
             self.stage(slot, prev, Vec::new());
             return Ok(());
@@ -124,7 +164,7 @@ impl Vm {
                 bail!("`{}` declares stage `{}` but exports no {}", p.name, s.name, s.export)
             }
         }
-        let m = Loaded::commit(p, &mut self.store, self.memory)?;
+        let m = self.commit_module(p)?;
         let prev_stages = std::mem::replace(&mut self.stages, declared);
         let prev = self.process.replace(m);
         self.stage(slot, prev, prev_stages);
@@ -144,8 +184,8 @@ impl Vm {
         }
     }
 
-    /// An empty slot is not an error: a game with no render module still
-    /// ticks, which is what makes the modules independently replaceable.
+    /// An empty slot is not an error: a game with no render module still ticks.
+    #[cfg(not(target_arch = "wasm32"))]
     fn call(&mut self, slot: Slot, sym: &str, arg: Option<u32>) -> Result<u32> {
         // `Instance` is `Copy`, so taking it ends the borrow of `self` before
         // `self.store` is borrowed mutably.
@@ -173,7 +213,7 @@ impl Vm {
     /// commands were recorded, which is all the host needs to know.
     ///
     /// The first frame after a swap confirms it; one that fails puts the
-    /// previous module back (`rollback.rs`).
+    /// previous modules back (`rollback.rs`).
     pub fn frame(&mut self, n: u32) -> Result<(u32, u32)> {
         let r = self.run_frame(n);
         self.settle(r, &Slot::ALL)
@@ -187,10 +227,7 @@ impl Vm {
         // length; the host is what keeps that honest against the capacity it
         // placed. This is the whole of what used to be spawn and despawn.
         for p in 0..self.world.pool_cap.len() as u32 {
-            let asked = {
-                let mem = NativeMem { memory: self.memory, store: &mut self.store };
-                self.world.len_of(&self.meta, &mem, p)?
-            };
+            let asked = self.read_pool_len(p)?;
             let cap = self.world.pool_cap[p as usize];
             if asked > cap {
                 self.set_len(p, cap)?;
@@ -229,7 +266,7 @@ impl Vm {
     }
 
     /// Copy an asset's bytes into the blob region and publish its span.
-    /// Variable length lives there; the record that names it does not grow.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn put_blob(&mut self, slot: u32, payload: &[u8]) -> Result<(u32, u32)> {
         let mut mem = NativeMem { memory: self.memory, store: &mut self.store };
         self.world.put_blob(&self.meta, &mut mem, slot, payload)
@@ -274,13 +311,22 @@ impl Vm {
 
     /// Ask for a pool to hold `len` rows. Nothing spawns: a control var asks,
     /// and the host answers by moving one number.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn set_len(&mut self, pool: u32, len: u32) -> Result<()> {
         let mut mem = NativeMem { memory: self.memory, store: &mut self.store };
         self.world.set_len(&self.meta, &mut mem, pool, len)
     }
 
+    /// The current length of a pool, read back.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn read_pool_len(&mut self, pool: u32) -> Result<u32> {
+        let mem = NativeMem { memory: self.memory, store: &mut self.store };
+        self.world.len_of(&self.meta, &mem, pool)
+    }
+
     /// The whole arena, byte for byte. A save file is this and nothing else —
     /// there is no entity table to serialise, because there are no entities.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn snapshot(&self) -> Vec<u8> {
         let end = self.world.blob_top as usize;
         self.memory.data(&self.store)[self.meta.base as usize..end].to_vec()
@@ -314,8 +360,8 @@ impl Vm {
         self.restore(payload)?;
         self.world.blob_top = end as u32;
         for p in 0..self.world.pool_len.len() as u32 {
-            let mem = NativeMem { memory: self.memory, store: &mut self.store };
-            self.world.pool_len[p as usize] = self.world.len_of(&self.meta, &mem, p)?;
+            let len = self.read_pool_len(p)?;
+            self.world.pool_len[p as usize] = len;
         }
         Ok(h.frame)
     }
@@ -333,18 +379,21 @@ impl Vm {
         Ok((0, self.settle(r, &[Slot::Render])?))
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn read(&self, at: u32, len: u32) -> Result<Vec<u8>> {
         let mut v = vec![0u8; len as usize];
         self.memory.read(&self.store, at as usize, &mut v)?;
         Ok(v)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn write(&mut self, at: u32, bytes: &[u8]) -> Result<()> {
         self.memory.write(&mut self.store, at as usize, bytes)?;
         Ok(())
     }
 
     /// The whole of linear memory, for handing a column straight to the GPU.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn bytes(&self) -> &[u8] {
         self.memory.data(&self.store)
     }
