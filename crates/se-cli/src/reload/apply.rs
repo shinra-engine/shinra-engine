@@ -102,7 +102,7 @@ impl Reloader {
             "asset" => {
                 // The slot is the asset's id: its place among the sorted names.
                 let index = src.asset_ids().iter().position(|n| n == name).context("asset vanished")?;
-                let Live { vm, gpu } = live;
+                let Live { vm, gpu, .. } = live;
                 crate::live::load_asset(vm, gpu, index as u32, name, wasm)?;
                 format!("asset/{name}")
             }

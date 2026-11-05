@@ -19,6 +19,29 @@ const ROWS: u32 = 1024;
 pub struct Live {
     pub vm: Vm,
     pub gpu: Gpu,
+    /// The render module's `(name, bytes)` as of the last frame that actually
+    /// produced a picture — what a GPU timeout rolls back to. `None` until
+    /// the first successful render.
+    pub last_good_render: Option<(String, Vec<u8>)>,
+}
+
+impl Live {
+    /// Remember the module now in the `Render` slot as the one that just
+    /// produced a picture.
+    pub fn cache_render(&mut self) {
+        if let Some(m) = self.vm.module(Slot::Render) {
+            self.last_good_render = Some((m.name.clone(), m.bytes.clone()));
+        }
+    }
+
+    /// Reinstate the render module that last produced a picture, for a caller
+    /// that just hit a GPU timeout. Fails if nothing has rendered yet, or if
+    /// the reload itself fails.
+    pub fn rollback_render(&mut self) -> Result<()> {
+        let (name, bytes) =
+            self.last_good_render.clone().context("no render module has produced a picture yet")?;
+        self.vm.load(Slot::Render, &name, bytes)
+    }
 }
 
 pub fn pick(src: &GameSrc, out: &Path, cat: &str, want: Option<&str>) -> Option<(String, PathBuf)> {
@@ -83,7 +106,7 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
         .with_context(|| format!("render/{rname}.wasm"))?;
     let mut gpu = gpu;
     load_assets(&mut vm, &mut gpu, src, &out, &mut |l| log.push(l))?;
-    Ok(Live { vm, gpu })
+    Ok(Live { vm, gpu, last_good_render: None })
 }
 
 /// Hand one asset module's payload to where its kind lives: meshes and images

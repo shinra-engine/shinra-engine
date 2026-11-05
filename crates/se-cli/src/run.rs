@@ -25,6 +25,7 @@ use se_vm::input::Keys;
 use se_vm::memory::Slot;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
+use wgpu::PollError;
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
 /// only makes the terminal the bottleneck.
@@ -45,7 +46,6 @@ pub struct Options {
     /// written, same as before this existed.
     pub pad: Option<PathBuf>,
 }
-
 
 /// The 256-key table the terminal keeps, folded into the three bitmasks the
 /// contract declares. Thirty-two keys is every key a game here has bound.
@@ -260,21 +260,24 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         }
 
         // Skip the render this iteration when there isn't enough time left
-        // before TARGET to pay for it; the previous `picture` stays on
-        // screen instead of going blank. The simulation accumulator above is
-        // unaffected either way.
+        // before TARGET to pay for it; the previous `picture` stays on screen
+        // instead of going blank. The simulation accumulator is unaffected.
         let remaining = TARGET.checked_sub(started.elapsed());
         let over_budget = should_skip_render(remaining, live.gpu.last_cost());
         if !over_budget {
             let px = match command::read(&live.vm.meta, live.vm.bytes()) {
                 Ok((cmds, _)) => {
-                    match live
+                    let rendered = live
                         .gpu
                         .replay(&live.vm.meta, &live.vm.world, live.vm.bytes(), &cmds)
-                    {
-                        Ok(_) => live.gpu.pixels().ok(),
+                        .and_then(|_| live.gpu.pixels());
+                    match rendered {
+                        Ok(p) => {
+                            live.cache_render();
+                            Some(p)
+                        }
                         Err(e) => {
-                            ide.note(format!("replay: {e:#}"));
+                            handle_replay_err(&mut live, &mut ide, e);
                             None
                         }
                     }
@@ -327,6 +330,18 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// A GPU timeout with a cache rolls the render slot back to the last-good
+/// module (a CPU trap's recovery); anything else is the existing generic note.
+fn handle_replay_err(live: &mut crate::live::Live, ide: &mut se_tui::Ide, e: anyhow::Error) {
+    if matches!(e.downcast_ref::<PollError>(), Some(PollError::Timeout)) && live.last_good_render.is_some() {
+        match live.rollback_render() {
+            Ok(()) => return report::render_timeout(ide, &e),
+            Err(rollback_err) => return ide.note(format!("replay: {e:#}; rollback failed: {rollback_err:#}")),
+        }
+    }
+    ide.note(format!("replay: {e:#}"));
 }
 
 /// Stand the deck's current entry up again, dropping the old game whole. On

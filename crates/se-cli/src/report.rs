@@ -36,6 +36,14 @@ pub fn frame_error(ide: &mut Ide, err: &anyhow::Error, rolled_back: Option<Vec<S
     }
 }
 
+/// Report a GPU timeout recovered by reloading the render module that last
+/// produced a picture, in the same style `frame_error` uses for a
+/// rolled-back CPU trap.
+pub fn render_timeout(ide: &mut Ide, err: &anyhow::Error) {
+    ide.error(format!("{err:#}"));
+    ide.note("rolled back render: the previous module is running".to_string());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -84,5 +92,17 @@ mod tests {
         frame_error(&mut ide, &anyhow::anyhow!("trap"), None);
         assert_eq!(ide.mode, Mode::Edit);
         assert!(ide.log.iter().any(|l| l.text.contains("frame failed")));
+    }
+
+    #[test]
+    fn a_gpu_timeout_rollback_is_an_error_then_a_note() {
+        let mut ide = Ide::default();
+        let before = ide.log.len();
+        render_timeout(&mut ide, &anyhow::anyhow!("GPU replay exceeded its budget"));
+        let new: Vec<_> = ide.log.iter().skip(before).collect();
+        assert_eq!(new.len(), 2);
+        assert_eq!(new[0].level, Level::Error);
+        assert_eq!(new[1].level, Level::Info);
+        assert_eq!(new[1].text, "rolled back render: the previous module is running");
     }
 }

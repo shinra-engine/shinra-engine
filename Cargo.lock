@@ -1726,6 +1726,7 @@ dependencies = [
  "se-gpu",
  "se-tui",
  "se-vm",
+ "wgpu",
 ]
 
 [[package]]

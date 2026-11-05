@@ -14,3 +14,4 @@ se-vm.workspace = true
 se-tui.workspace = true
 ratatui.workspace = true
 anyhow.workspace = true
+wgpu.workspace = true
