@@ -37,11 +37,23 @@ pub struct Target {
     readback: wgpu::Buffer,
 }
 
+/// A lazily-created offscreen render target (ids 1..=8). Unlike the present
+/// `Target`, it is only ever sampled by a later pass, never read back to the
+/// CPU, so it carries no readback buffer. The view keeps its texture alive.
+struct Offscreen {
+    width: u32,
+    height: u32,
+    view: wgpu::TextureView,
+}
+
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub adapter_name: String,
     target: Target,
+    /// Offscreen targets 1..=8, created the first time a command names them
+    /// and dropped wholesale by `resize()` so a stale size is never read.
+    offscreen: HashMap<u32, Offscreen>,
     module: wgpu::ShaderModule,
     pipe_layout: wgpu::PipelineLayout,
     /// Keyed by (instance column, has-mesh); filled on first use.
@@ -133,17 +145,12 @@ impl Gpu {
             bind_group_layouts: &[&bind_layout],
             push_constant_ranges: &[],
         });
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("present"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
+        let (texture, view) = Self::make_texture(
+            &device,
+            width,
+            height,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
         let row_bytes = (width * 4).div_ceil(256) * 256;
         let readback = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -181,6 +188,7 @@ impl Gpu {
             queue,
             adapter_name,
             target: Target { width, height, row_bytes, texture, view, readback },
+            offscreen: HashMap::new(),
             module,
             pipe_layout: layout,
             pipelines: HashMap::new(),
@@ -241,17 +249,12 @@ impl Gpu {
         if (width, height) == (self.target.width, self.target.height) || width == 0 || height == 0 {
             return;
         }
-        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("present"),
-            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&Default::default());
+        let (texture, view) = Self::make_texture(
+            &self.device,
+            width,
+            height,
+            wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        );
         let row_bytes = (width * 4).div_ceil(256) * 256;
         let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
@@ -260,5 +263,84 @@ impl Gpu {
             mapped_at_creation: false,
         });
         self.target = Target { width, height, row_bytes, texture, view, readback };
+        // A cached offscreen target's size follows the present target's size
+        // at the time it was created; a stale one must never be read back.
+        self.offscreen.clear();
+    }
+
+    fn make_texture(
+        device: &wgpu::Device,
+        width: u32,
+        height: u32,
+        usage: wgpu::TextureUsages,
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("target"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        (texture, view)
+    }
+
+    /// Resolve a target id to its view: 0 is the present target, 1..=8 are
+    /// offscreen, created lazily at the present target's current size the
+    /// first time a command names them. `resize()` drops every offscreen
+    /// target, so a stale size is never read.
+    pub(crate) fn target_view(&mut self, id: u32) -> &wgpu::TextureView {
+        if id == 0 {
+            return &self.target.view;
+        }
+        if !self.offscreen.contains_key(&id) {
+            let (width, height) = (self.target.width, self.target.height);
+            let (_, view) = Self::make_texture(
+                &self.device,
+                width,
+                height,
+                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            );
+            self.offscreen.insert(id, Offscreen { width, height, view });
+        }
+        &self.offscreen[&id].view
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn gpu(w: u32, h: u32) -> Result<Gpu> {
+        let wit =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
+        let g = se_contract::generate(&wit)?;
+        let vm = se_vm::Vm::new(&g.module, 1)?;
+        Gpu::new(&vm.meta, &g.wgsl, w, h)
+    }
+
+    #[test]
+    fn target_view_resolves_caches_and_drops_on_resize() -> Result<()> {
+        let mut g = gpu(16, 16)?;
+
+        let present = g.target_view(0).clone();
+        assert_eq!(present, g.target.view);
+
+        let first = g.target_view(5).clone();
+        assert_ne!(first, present, "an offscreen target is not the present one");
+        assert_eq!((g.offscreen[&5].width, g.offscreen[&5].height), (16, 16));
+
+        let second = g.target_view(5).clone();
+        assert_eq!(first, second, "a second resolve must reuse the cached target");
+
+        g.resize(32, 32);
+        let third = g.target_view(5).clone();
+        assert_ne!(third, first, "resize must drop the stale-sized offscreen target");
+        assert_eq!((g.offscreen[&5].width, g.offscreen[&5].height), (32, 32));
+        Ok(())
     }
 }
