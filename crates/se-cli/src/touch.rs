@@ -3,9 +3,13 @@
 //! frame's `Keys` alongside it. No contract or se-vm change: the existing
 //! 24-byte `input` record is used exactly as declared.
 
+use anyhow::{bail, Context, Result};
+use crossterm::event::{MouseButton, MouseEventKind};
+use ratatui::layout::Rect;
 use se_tui::touch::Pointer;
-use se_tui::{Areas, Terminal};
+use se_tui::{Areas, Panel, Terminal};
 use se_vm::input::Keys;
+use std::path::Path;
 
 /// Maps a terminal cell to normalized viewport coordinates — 0..1, origin
 /// top-left, y down — from the cell's center relative to the viewport's
@@ -99,91 +103,128 @@ pub fn keys_of(t: &Terminal, touch: &mut Touch, play: bool, areas: &Areas) -> Ke
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crossterm::event::{MouseButton, MouseEventKind};
-    use ratatui::layout::Rect;
-    use se_tui::Panel;
+/// A synthetic one-panel `Areas`: the whole frame is the viewport, with the
+/// same 1-cell border exclusion a real IDE layout applies, so `normalize`
+/// sees the identical shape it would from a live `Terminal`.
+fn synthetic_viewport(size: (u32, u32)) -> Areas {
+    let (w, h) = size;
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: (w as u16).saturating_add(2),
+        height: (h as u16).saturating_add(2),
+    };
+    Areas { rects: [(Panel::Viewport, rect); 5] }
+}
 
-    const ORIGIN: (u16, u16) = (1, 1);
-    const INNER: (u16, u16) = (11, 11);
+/// `shinra shot` has no terminal, so there is no [`Pointer`] for a real tap to
+/// feed. This replays a fixed, deterministic sequence of pointer events read
+/// once from a file — one per frame, same polling shape as
+/// [`crate::pad::ScriptedPad`] — through the identical `Pointer` ->
+/// [`Touch::update`] -> [`normalize`] path a live terminal drives, so a
+/// headless screenshot proves the whole chain.
+pub struct ScriptedTouch {
+    events: Vec<Option<(MouseEventKind, u16, u16)>>,
+    pointer: Pointer,
+    touch: Touch,
+    areas: Areas,
+}
 
-    /// A viewport-only `Areas`, origin `(1, 1)` and inner size `(11, 11)` —
-    /// a 13x13 outer rect at (0, 0), border excluded same as `viewport_inner`.
-    fn viewport() -> Areas {
-        let rect = Rect {
-            x: 0,
-            y: 0,
-            width: 13,
-            height: 13,
-        };
-        Areas {
-            rects: [(Panel::Viewport, rect); 5],
+impl ScriptedTouch {
+    /// Reads the line format [`parse_touch`] describes. `size` is the
+    /// headless framebuffer size, which stands in for the viewport a real
+    /// IDE layout would have measured.
+    pub fn open(path: &Path, size: (u32, u32)) -> Result<Self> {
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        Ok(ScriptedTouch {
+            events: parse_touch(&text)?,
+            pointer: Pointer::new(),
+            touch: Touch::new(),
+            areas: synthetic_viewport(size),
+        })
+    }
+
+    /// Feeds this frame's scripted event (if any) into the pointer, then runs
+    /// the same `Touch::update` a live terminal does, always in Play mode —
+    /// headless has no IDE to steal clicks for. Keyboard bits stay zero: a
+    /// scripted touch file drives only the pointer. Once the script runs out,
+    /// the last line repeats, same rule [`crate::pad::ScriptedPad`] uses.
+    pub fn poll(&mut self, frame: u32) -> Keys {
+        let ev = self
+            .events
+            .get(frame as usize)
+            .or(self.events.last())
+            .copied()
+            .flatten();
+        if let Some((kind, col, row)) = ev {
+            self.pointer.feed(kind, col, row);
         }
-    }
-
-    #[test]
-    fn center_cell_maps_near_half() {
-        let (x, y) = normalize(ORIGIN, INNER, 6, 6).unwrap();
-        assert!((x - 0.5).abs() < 1e-6, "x={x}");
-        assert!((y - 0.5).abs() < 1e-6, "y={y}");
-    }
-
-    #[test]
-    fn outside_viewport_reports_not_down_with_position_unchanged() {
-        let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
-        p.feed(MouseEventKind::Moved, 6, 6);
-        let (first, _) = t.update(true, &v, &p);
-        p.feed(MouseEventKind::Moved, 50, 50);
-        let (second, down) = t.update(true, &v, &p);
-        assert_eq!(first, second);
-        assert_eq!(down, 0);
-    }
-
-    #[test]
-    fn press_starting_outside_and_dragging_inside_stays_not_down() {
-        let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
-        p.feed(MouseEventKind::Down(MouseButton::Left), 50, 50);
-        let (_, down) = t.update(true, &v, &p);
-        assert_eq!(down, 0);
-        p.feed(MouseEventKind::Drag(MouseButton::Left), 6, 6);
-        let (_, down) = t.update(true, &v, &p);
-        assert_eq!(down, 0, "started outside — stays up even once inside");
-    }
-
-    #[test]
-    fn press_starting_inside_stays_down_while_dragging_outside() {
-        let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
-        p.feed(MouseEventKind::Down(MouseButton::Left), 6, 6);
-        let (_, down) = t.update(true, &v, &p);
-        assert_eq!(down, 1);
-        p.feed(MouseEventKind::Drag(MouseButton::Left), 50, 50);
-        let (pos, down) = t.update(true, &v, &p);
-        assert_eq!(down, 1, "started inside — stays down even once outside");
-        let (cx, cy) = normalize(ORIGIN, INNER, 6, 6).unwrap();
-        assert_eq!(
-            pos,
-            [cx, cy],
-            "position holds at the last cell inside the viewport"
-        );
-    }
-
-    #[test]
-    fn edit_mode_never_reports_down() {
-        let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
-        p.feed(MouseEventKind::Down(MouseButton::Left), 6, 6);
-        let (_, down) = t.update(false, &v, &p);
-        assert_eq!(down, 0);
-    }
-
-    #[test]
-    fn release_requires_a_fresh_press_to_go_down_again() {
-        let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
-        p.feed(MouseEventKind::Down(MouseButton::Left), 6, 6);
-        t.update(true, &v, &p);
-        p.feed(MouseEventKind::Up(MouseButton::Left), 6, 6);
-        let (_, down) = t.update(true, &v, &p);
-        assert_eq!(down, 0);
+        let (mouse, mouse_down) = self.touch.update(true, &self.areas, &self.pointer);
+        Keys { down: 0, pressed: 0, released: 0, mouse, mouse_down }
     }
 }
+
+/// One line per frame: `down COL,ROW`, `drag COL,ROW`, `up COL,ROW`, or
+/// `move COL,ROW` (a plain reposition with no button change), or `-` for no
+/// event this frame (the pointer holds its latched state, same as a live
+/// terminal would between reports). Blank lines and lines starting with `#`
+/// are skipped.
+///
+/// ```text
+/// -
+/// down 5,5
+/// drag 6,6
+/// up 6,6
+/// ```
+fn parse_touch(text: &str) -> Result<Vec<Option<(MouseEventKind, u16, u16)>>> {
+    let mut events = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if line == "-" {
+            events.push(None);
+            continue;
+        }
+        let (cmd, rest) = line
+            .split_once(' ')
+            .with_context(|| format!("bad touch line `{line}`"))?;
+        let (col, row) = rest
+            .trim()
+            .split_once(',')
+            .with_context(|| format!("bad touch position in `{line}`"))?;
+        let col: u16 = col
+            .trim()
+            .parse()
+            .with_context(|| format!("bad column in `{line}`"))?;
+        let row: u16 = row
+            .trim()
+            .parse()
+            .with_context(|| format!("bad row in `{line}`"))?;
+        let kind = match cmd {
+            "down" => MouseEventKind::Down(MouseButton::Left),
+            "drag" => MouseEventKind::Drag(MouseButton::Left),
+            "up" => MouseEventKind::Up(MouseButton::Left),
+            "move" => MouseEventKind::Moved,
+            _ => bail!("unknown touch command `{cmd}`"),
+        };
+        events.push(Some((kind, col, row)));
+    }
+    Ok(events)
+}
+
+/// Proves the whole chain end to end: a contract that declares no `pad`, a
+/// game module that reads `arena::INPUT.mouse_down` (the engine's own
+/// control var, always injected — see `crates/se-contract/src/engine.wit`)
+/// and writes it to an observable `look` var, driven by a real
+/// [`ScriptedTouch`] through the same `set_input`/`Vm::frame` sequence
+/// `shot::run` and `run::run` use. Lives here rather than in `se-vm`'s or
+/// `se-cli`'s `tests/`, for the same reason `pad.rs`'s `vm_integration`
+/// module does: `ScriptedTouch` is private to this binary crate.
+#[cfg(test)]
+mod vm_integration;
+
+#[cfg(test)]
+mod tests;

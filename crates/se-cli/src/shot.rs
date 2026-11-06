@@ -17,6 +17,7 @@
 use crate::build;
 use crate::discover::GameSrc;
 use crate::pad::{PadSource, ScriptedPad};
+use crate::touch::ScriptedTouch;
 use crate::Args;
 use anyhow::{bail, Context, Result};
 use se_gpu::{command, Gpu};
@@ -49,6 +50,11 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     }
 
     let mut pad_source = a.pad.as_deref().map(ScriptedPad::open).transpose()?;
+    let mut touch_source = a
+        .touch
+        .as_deref()
+        .map(|p| ScriptedTouch::open(p, a.size))
+        .transpose()?;
 
     // One frame first, so the module can say what it wants drawn. No pad
     // state yet: the loop below is the real, numbered frame sequence a
@@ -92,6 +98,9 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     for f in start..end {
         if let Some(ps) = pad_source.as_mut() {
             vm.set_pad(ps.poll(f))?;
+        }
+        if let Some(ts) = touch_source.as_mut() {
+            vm.set_input(ts.poll(f))?;
         }
         let (rows, _) = vm.frame(f)?;
         for o in vm.take_overruns() {

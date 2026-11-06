@@ -54,6 +54,7 @@ options
       --no-watch      run: do not reload modules when their sources change
       --pad <file>    feed a scripted gamepad sequence (see pad.rs); headless
                        runs have no other source of one
+      --touch <file>  shot: feed a scripted touch/mouse sequence (see touch.rs)
 ";
 
 pub struct Args {
@@ -70,6 +71,7 @@ pub struct Args {
     pub load: Option<PathBuf>,
     pub watch: bool,
     pub pad: Option<PathBuf>,
+    pub touch: Option<PathBuf>,
 }
 
 fn parse() -> Result<Args> {
@@ -98,6 +100,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
         load: None,
         watch: true,
         pad: None,
+        touch: None,
     };
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -111,6 +114,7 @@ fn parse_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
             "--load" => a.load = it.next().map(PathBuf::from),
             "--no-watch" => a.watch = false,
             "--pad" => a.pad = it.next().map(PathBuf::from),
+            "--touch" => a.touch = it.next().map(PathBuf::from),
             "--size" => {
                 let s = it.next().unwrap_or_default();
                 let (w, h) = s.split_once('x').unwrap_or(("320", "180"));
