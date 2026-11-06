@@ -9,6 +9,7 @@
 //! game is running the keyboard is its own — `m` is whatever that game decided
 //! `m` means — and the host keeps only the keys that leave or switch a run.
 
+use crate::audio::{self, HeadlessSink};
 use crate::deck::Deck;
 use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
@@ -115,6 +116,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     // Holds the last drawn frame so a skipped render redraws it instead of a
     // blank one.
     let mut picture: Vec<u8> = Vec::new();
+    // No real audio device exists to target yet; see audio.rs.
+    let mut audio_sink = HeadlessSink::default();
 
     loop {
         let started = Instant::now();
@@ -214,6 +217,18 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
                 if r.is_err() {
                     break;
                 }
+                match live.vm.take_sound() {
+                    Ok(Some(event)) => {
+                        if let Err(w) = audio::dispatch(&live.vm, event, &mut audio_sink) {
+                            ide.note(w);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        r = Err(e);
+                        break;
+                    }
+                }
                 index += 1;
             }
             if steps == 0 { live.vm.record_only() } else { r }
@@ -222,6 +237,9 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         };
         for o in live.vm.take_overruns() {
             ide.note(o);
+        }
+        for s in audio_sink.take_log() {
+            ide.note(s);
         }
         if let Err(e) = stepped {
             report::frame_error(&mut ide, &e, live.vm.take_rollback());

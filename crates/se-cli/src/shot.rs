@@ -14,6 +14,7 @@
 //! runs one frame first and then builds the pipeline for the column the module
 //! chose to draw, rather than deciding for it.
 
+use crate::audio::{self, HeadlessSink};
 use crate::build;
 use crate::discover::GameSrc;
 use crate::pad::{PadSource, ScriptedPad};
@@ -95,6 +96,8 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     }
     let end = start + a.frames.max(1);
     let mut pixels = Vec::new();
+    // No real audio device exists to target yet; see audio.rs.
+    let mut audio_sink = HeadlessSink::default();
     for f in start..end {
         if let Some(ps) = pad_source.as_mut() {
             vm.set_pad(ps.poll(f))?;
@@ -105,6 +108,14 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
         let (rows, _) = vm.frame(f)?;
         for o in vm.take_overruns() {
             eprintln!("  {o}");
+        }
+        if let Some(event) = vm.take_sound()? {
+            if let Err(w) = audio::dispatch(&vm, event, &mut audio_sink) {
+                eprintln!("  {w}");
+            }
+        }
+        for s in audio_sink.take_log() {
+            eprintln!("  {s}");
         }
         let (cmds, epoch) = command::read(&vm.meta, vm.bytes())?;
         let report = gpu.replay(&vm.meta, &vm.world, vm.bytes(), &cmds)?;

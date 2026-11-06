@@ -13,6 +13,7 @@
 //! `process/`, `render/`, `game/` beside it. There is no project file to keep
 //! in sync with the tree.
 
+mod audio;
 mod build;
 mod deck;
 mod discover;
