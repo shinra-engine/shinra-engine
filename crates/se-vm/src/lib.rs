@@ -16,6 +16,7 @@ pub mod mem;
 pub mod memory;
 pub mod module;
 pub mod save;
+pub mod sound;
 pub mod stages;
 pub mod world;
 

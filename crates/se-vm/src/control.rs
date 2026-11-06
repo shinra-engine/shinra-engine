@@ -1,12 +1,14 @@
-//! Writers for the host-owned control vars: keyboard, pad, clock.
+//! Writers for the host-owned control vars (keyboard, pad, clock), and the
+//! one reader: a sound request a game wrote.
 //!
 //! Split out of `vm.rs` to keep that file under the project's 400-line
 //! convention; these are `impl Vm` blocks like any other, just in their own
-//! module because the three share one shape (check the contract's declared
-//! record, then write bytes at the address it names).
+//! module because they share one shape (check the contract's declared
+//! record, then touch bytes at the address it names).
 
 use crate::clock;
 use crate::input::{self, Keys, Pad};
+use crate::sound;
 use crate::vm::Vm;
 use anyhow::{bail, Context, Result};
 
@@ -110,5 +112,49 @@ impl Vm {
             }
         }
         self.write(at, &c.to_bytes())
+    }
+
+    /// Edge-detect a sound request. `None` unless `sound.seq` changed since
+    /// the last call — plain `!=`, which reads right across the one
+    /// wraparound in four billion requests too. A contract with no `sound`
+    /// control var never fires, same optional rule as `set_input`/`set_pad`.
+    ///
+    /// `load_save` deliberately never touches `self.last_sound_seq`: the
+    /// comparison below already gives "equal to what this Vm last reported
+    /// → silent, differs → fires once", restored arena or not.
+    pub fn take_sound(&mut self) -> Result<Option<sound::SoundEvent>> {
+        let Some((at, len)) = self.meta.control_at("sound") else {
+            return Ok(None);
+        };
+        if len != sound::BYTES {
+            bail!(
+                "`control.sound` is {len} bytes; this engine reads {}",
+                sound::BYTES
+            )
+        }
+        let r = self
+            .meta
+            .record("sound")
+            .context("the contract names a `sound` control var but declares no record")?;
+        for (name, off) in sound::FIELDS {
+            let f = r
+                .fields
+                .iter()
+                .find(|f| f.name == name)
+                .with_context(|| format!("`control.sound` has no `{name}`"))?;
+            if f.offset != off {
+                bail!(
+                    "`control.sound.{name}` is at {}; this engine reads {off}",
+                    f.offset
+                )
+            }
+        }
+        let b = self.read(at, sound::BYTES)?;
+        let seq = u32::from_le_bytes(b[0..4].try_into().unwrap());
+        let id = u32::from_le_bytes(b[4..8].try_into().unwrap());
+        let gain = f32::from_le_bytes(b[8..12].try_into().unwrap());
+        let changed = seq != self.last_sound_seq;
+        self.last_sound_seq = seq;
+        Ok(changed.then_some(sound::SoundEvent { id, gain }))
     }
 }

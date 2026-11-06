@@ -74,6 +74,8 @@ pub struct Vm {
     contract_id: u64,
     /// Roster requests the host had to clamp, for the UI to show.
     overruns: Vec<String>,
+    /// `sound.seq` last reported by `take_sound`; see `control.rs`.
+    pub(crate) last_sound_seq: u32,
 }
 
 impl Vm {
@@ -112,6 +114,7 @@ impl Vm {
             rolled_back: None,
             contract_id,
             overruns: Vec::new(),
+            last_sound_seq: 0,
         })
     }
 
@@ -358,6 +361,9 @@ impl Vm {
             bail!("save reaches 0x{end:x}, past the heap limit 0x{:x}", crate::memory::heap_limit())
         }
         self.restore(payload)?;
+        // `last_sound_seq` is left untouched: `take_sound`'s own comparison
+        // against the restored `sound.seq` already gives "equal → silent,
+        // differs → fires once"; resetting it here would break one case.
         self.world.blob_top = end as u32;
         for p in 0..self.world.pool_len.len() as u32 {
             let len = self.read_pool_len(p)?;
