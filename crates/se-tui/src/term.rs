@@ -8,6 +8,7 @@
 use anyhow::Result;
 use crate::slot::{slot_key, SlotKey};
 use crate::state::Panel;
+use crate::touch::Pointer;
 use crossterm::event::{
     self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
     KeyModifiers, MouseEventKind,
@@ -116,6 +117,10 @@ pub struct Terminal {
     last_press: Vec<Option<Instant>>,
     prev_down: [u8; KEY_COUNT],
     pub input: Input,
+    /// Raw terminal-cell position and held state, fed every mouse event
+    /// (not just Down, unlike `intent.click`) so a caller can tell a drag
+    /// that started inside the viewport from one that merely passes through.
+    pub pointer: Pointer,
     pub quit: bool,
     pub intent: Intent,
     /// Set by the host before each poll. While playing, the keyboard is the
@@ -151,6 +156,7 @@ impl Terminal {
             last_press: vec![None; KEY_COUNT],
             prev_down: [0; KEY_COUNT],
             input: Input::zeroed(),
+            pointer: Pointer::new(),
             quit: false,
             intent: Intent::default(),
             typing: false,
@@ -182,6 +188,7 @@ impl Terminal {
                     if matches!(m.kind, MouseEventKind::Down(_)) {
                         self.intent.click = Some((m.column, m.row));
                     }
+                    self.pointer.feed(m.kind, m.column, m.row);
                 }
                 Event::Resize(_, _) => {}
                 _ => {}

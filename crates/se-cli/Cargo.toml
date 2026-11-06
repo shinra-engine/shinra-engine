@@ -15,3 +15,6 @@ se-tui.workspace = true
 ratatui.workspace = true
 anyhow.workspace = true
 wgpu.workspace = true
+
+[dev-dependencies]
+crossterm.workspace = true

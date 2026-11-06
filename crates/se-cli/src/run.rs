@@ -16,12 +16,12 @@ use crate::pad::{PadSource, ScriptedPad};
 use crate::reload::{Outcome, Reloader, Selection};
 use crate::report;
 use crate::savefile;
+use crate::touch::{keys_of, Touch};
 use anyhow::Result;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal as RTerminal;
 use se_gpu::command;
 use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
-use se_vm::input::Keys;
 use se_vm::memory::Slot;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -45,40 +45,6 @@ pub struct Options {
     /// A scripted gamepad sequence; `None` means no `pad` control var is ever
     /// written, same as before this existed.
     pub pad: Option<PathBuf>,
-}
-
-/// The 256-key table the terminal keeps, folded into the three bitmasks the
-/// contract declares. Thirty-two keys is every key a game here has bound.
-fn keys_of(t: &Terminal) -> Keys {
-    use se_vm::input as k;
-    let fold = |pick: &dyn Fn(u8) -> bool| -> u32 {
-        let mut m = 0u32;
-        for c in b'a'..=b'z' {
-            if pick(c) || pick(c.to_ascii_uppercase()) {
-                m |= k::letter(c);
-            }
-        }
-        for (code, bit) in [
-            (se_tui::key::SPACE, k::SPACE),
-            (se_tui::key::ENTER, k::ENTER),
-            (se_tui::key::LEFT, k::LEFT),
-            (se_tui::key::RIGHT, k::RIGHT),
-            (se_tui::key::UP, k::UP),
-            (se_tui::key::DOWN, k::DOWN),
-        ] {
-            if pick(code) {
-                m |= bit;
-            }
-        }
-        m
-    };
-    Keys {
-        down: fold(&|c| t.input.is_down(c)),
-        pressed: fold(&|c| t.input.just_pressed(c)),
-        released: fold(&|c| t.input.just_released(c)),
-        mouse: t.input.mouse,
-        mouse_down: t.input.mouse_down as u32,
-    }
 }
 
 /// Framebuffer size for a viewport of `cols` x `rows` cells. A cell is not one
@@ -123,6 +89,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     let mut screen = framebuffer_for(cells.0, cells.1, ide.art);
 
     let mut pad_source = opt.pad.as_deref().map(ScriptedPad::open).transpose()?;
+    let mut touch = Touch::new();
 
     let mut log = Vec::new();
     let mut live = open(&deck, &opt, screen, &mut log)?;
@@ -216,7 +183,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
         // The keyboard is a control var: written before the tick, read by the
         // game at an address the contract fixed, with no host call.
-        live.vm.set_input(keys_of(&term))?;
+        live.vm
+            .set_input(keys_of(&term, &mut touch, term.play, &areas))?;
 
         if opt.watch && polled.elapsed() >= WATCH {
             polled = Instant::now();

@@ -27,6 +27,7 @@ mod run;
 mod savefile;
 mod shot;
 mod swap;
+mod touch;
 
 use anyhow::{bail, Result};
 use discover::GameSrc;
