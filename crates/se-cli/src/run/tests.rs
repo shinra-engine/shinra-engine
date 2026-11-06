@@ -66,12 +66,11 @@ fn advance_steps_carries_a_partial_step_to_the_next_call() {
     assert_eq!(steps2, 0, "half a step held over should not round up on its own");
 }
 
-/// `handle_replay_err`: a GPU timeout rolls the render slot back to the
-/// module that last produced a picture; anything else is left to the
-/// existing generic `replay:` note. The `Err` is built directly — the branch
-/// under test only ever downcasts it, so no real GPU call is needed to drive
-/// it, only a real `Vm` with two loaded render modules to prove `Vm::load`
-/// actually ran.
+/// `handle_render_timeout`: a GPU timeout rolls the render slot back to the
+/// module that last produced a picture. The worker thread has already
+/// classified the replay failure before this runs, so no real GPU timeout is
+/// needed to drive it, only a real `Vm` with two loaded render modules to
+/// prove `Vm::load` actually ran.
 mod replay_err {
     use super::*;
     use crate::live::Live;
@@ -183,8 +182,7 @@ fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(cam.fov, 0.0, 0.0, 1.0
 
         let mut ide = se_tui::Ide::default();
         let before = ide.log.len();
-        let e = anyhow::Error::new(PollError::Timeout).context("GPU replay exceeded its 2s budget");
-        handle_replay_err(&mut live, &mut ide, e);
+        handle_render_timeout(&mut live, &mut ide);
 
         assert_eq!(
             render_name(&live),
@@ -196,30 +194,6 @@ fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(cam.fov, 0.0, 0.0, 1.0
             notes.contains(&"rolled back render: the previous module is running"),
             "{notes:?}"
         );
-        Ok(())
-    }
-
-    #[test]
-    fn a_non_timeout_error_leaves_the_render_slot_alone() -> anyhow::Result<()> {
-        if !has_wasm_target() {
-            eprintln!("skipped: wasm32-unknown-unknown is not installed");
-            return Ok(());
-        }
-        let mut live = rig("other")?;
-
-        let mut ide = se_tui::Ide::default();
-        let before = ide.log.len();
-        let e = anyhow::anyhow!("render.wasm recorded command kind 9, which this host has no rule for");
-        handle_replay_err(&mut live, &mut ide, e);
-
-        assert_eq!(
-            render_name(&live),
-            Some("render_bad"),
-            "a non-timeout replay error must not touch the render slot"
-        );
-        let notes: Vec<&str> = ide.log.iter().skip(before).map(|l| l.text.as_str()).collect();
-        assert_eq!(notes.len(), 1, "{notes:?}");
-        assert!(notes[0].starts_with("replay: "), "{notes:?}");
         Ok(())
     }
 }

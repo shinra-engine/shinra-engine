@@ -27,7 +27,6 @@ use se_tui::{Areas, Ide, Mode, Pixels, TextArtMode, Terminal};
 use se_vm::memory::Slot;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use wgpu::PollError;
 
 /// Terminal presentation is cheap but not free, and a loop that spins flat out
 /// only makes the terminal the bottleneck.
@@ -268,8 +267,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
                 live.cache_render();
                 picture = p;
             }
-            // task-248 wires this to story-241's reload-last-good-module policy.
-            Some(RenderReply::TimedOut) => ide.note("replay: GPU timed out".to_string()),
+            Some(RenderReply::TimedOut) => handle_render_timeout(&mut live, &mut ide),
             Some(RenderReply::Failed(e)) => ide.note(format!("replay: {e}")),
             None => {}
         }
@@ -316,23 +314,18 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     Ok(())
 }
 
-/// A GPU timeout with a cache rolls the render slot back to the last-good
-/// module (a CPU trap's recovery); anything else is the existing generic note.
-///
-/// Not yet called from `run()`'s loop: the worker thread already classifies
-/// a replay failure into `RenderReply::TimedOut`/`Failed` before it reaches
-/// the main thread, so there is no `anyhow::Error` left to downcast there.
-/// task-248 wires `RenderReply::TimedOut` to this same rollback; kept here,
-/// still exercised by its own tests below, until that lands.
-#[allow(dead_code)]
-fn handle_replay_err(live: &mut crate::live::Live, ide: &mut se_tui::Ide, e: anyhow::Error) {
-    if matches!(e.downcast_ref::<PollError>(), Some(PollError::Timeout)) && live.last_good_render.is_some() {
-        match live.rollback_render() {
-            Ok(()) => return report::render_timeout(ide, &e),
-            Err(rollback_err) => return ide.note(format!("replay: {e:#}; rollback failed: {rollback_err:#}")),
-        }
+/// A GPU timeout rolls the render slot back to the module that last produced
+/// a picture (a CPU trap's recovery); the worker thread has already
+/// classified the replay failure as a timeout before this runs, so there is
+/// no `anyhow::Error` left to downcast here.
+fn handle_render_timeout(live: &mut crate::live::Live, ide: &mut se_tui::Ide) {
+    if live.last_good_render.is_none() {
+        return ide.note("replay: GPU timed out".to_string());
     }
-    ide.note(format!("replay: {e:#}"));
+    match live.rollback_render() {
+        Ok(()) => report::render_timeout(ide, &anyhow::anyhow!("GPU replay timed out")),
+        Err(rollback_err) => ide.note(format!("replay: GPU timed out; rollback failed: {rollback_err:#}")),
+    }
 }
 
 /// Stand the deck's current entry up again, dropping the old game whole. On
