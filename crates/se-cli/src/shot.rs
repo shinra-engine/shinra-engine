@@ -85,7 +85,7 @@ pub fn run(a: &Args, src: &GameSrc, out: &Path) -> Result<()> {
     let (w, h) = a.size;
     let mut gpu = Gpu::new(&vm.meta, &format!("{contract_wgsl}\n{wgsl}"), w, h)?;
     eprintln!("  adapter: {}", gpu.adapter());
-    crate::live::load_assets(&mut vm, &mut gpu, src, out, &mut |l| eprintln!("  {l}"))?;
+    crate::live::load_assets(&mut vm, &mut |id, r| gpu.set_resource(id, r), src, out, &mut |l| eprintln!("  {l}"))?;
 
     let mut start = 0u32;
     if let Some(file) = &a.load {

@@ -30,11 +30,11 @@ pub fn swap(live: &mut Live, src: &GameSrc, out: &Path, cat: &str, name: &str, s
         }
         let mut g = make_gpu(&live.vm, out, &bytes, size)?;
         // A fresh Gpu holds no meshes or images; upload them again by id.
-        crate::live::load_assets(&mut live.vm, &mut g, src, out, &mut |_| {})?;
+        crate::live::load_assets(&mut live.vm, &mut |id, r| g.set_resource(id, r), src, out, &mut |_| {})?;
         Ok(Some(g))
     });
     match gpu {
-        Ok(Some(g)) => live.gpu = g,
+        Ok(Some(g)) => live.render.replace(g),
         Ok(None) => {}
         Err(e) => {
             if let Some((pn, pb)) = prev {
@@ -66,8 +66,10 @@ pub fn swap_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render_worker::RenderReply;
     use crate::{deck::Deck, run::Options};
     use se_gpu::command;
+    use std::time::{Duration, Instant};
 
     fn deck() -> Deck {
         let root = std::env::var("SHINRA_EXAMPLES")
@@ -79,6 +81,32 @@ mod tests {
         Options { profile: "debug".into(), frames: None, game: None, render: Some("solid".into()), watch: false, pad: None }
     }
 
+    /// `Gpu` lives on the worker thread now; a test proves a render by
+    /// sending a snapshot and waiting out the reply, same as `run.rs` polls
+    /// it every iteration, just blocking since a test has nothing else to do
+    /// meanwhile.
+    fn render_now(live: &Live) -> Vec<u8> {
+        let (cmds, _) = command::read(&live.vm.meta, live.vm.bytes()).unwrap();
+        assert!(live.render.try_send_snapshot(
+            live.vm.meta.clone(),
+            live.vm.world.clone(),
+            live.vm.bytes().to_vec(),
+            cmds,
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match live.render.try_recv_reply() {
+                Some(RenderReply::Picture(px)) => return px,
+                Some(RenderReply::TimedOut) => panic!("worker reported a GPU timeout on a healthy Gpu"),
+                Some(RenderReply::Failed(e)) => panic!("worker reported a replay error: {e}"),
+                None => {
+                    assert!(Instant::now() < deadline, "worker never replied within 5s");
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+    }
+
     #[test]
     fn render_solid_to_ghost_keeps_world_and_bad_name_errs() {
         let d = deck();
@@ -88,9 +116,7 @@ mod tests {
         let rows = |l: &Live| l.vm.snapshot()[(l.vm.meta.pools_at - l.vm.meta.base) as usize..].to_vec();
         live.vm.frame(0).unwrap();
         let before = rows(&live);
-        let (cmds, _) = command::read(&live.vm.meta, live.vm.bytes()).unwrap();
-        live.gpu.replay(&live.vm.meta, &live.vm.world, live.vm.bytes(), &cmds).unwrap();
-        let first = live.gpu.pixels().ok();
+        let first = render_now(&live);
         assert_eq!(live.vm.module(Slot::Render).unwrap().name, "solid");
 
         assert!(swap(&mut live, d.src(), &out, "render", "nope", (64, 36)).is_err());
@@ -100,8 +126,6 @@ mod tests {
         assert_eq!(live.vm.module(Slot::Render).unwrap().name, "ghost");
         assert_eq!(rows(&live), before);
         live.vm.record_only().unwrap();
-        let (cmds, _) = command::read(&live.vm.meta, live.vm.bytes()).unwrap();
-        live.gpu.replay(&live.vm.meta, &live.vm.world, live.vm.bytes(), &cmds).unwrap();
-        assert_ne!(live.gpu.pixels().ok(), first);
+        assert_ne!(render_now(&live), first);
     }
 }

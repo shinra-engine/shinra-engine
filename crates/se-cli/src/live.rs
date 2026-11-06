@@ -4,8 +4,10 @@
 use crate::build;
 use crate::deck::Deck;
 use crate::discover::GameSrc;
+use crate::render_worker::RenderWorker;
 use crate::run::Options;
 use anyhow::{bail, Context, Result};
+use se_gpu::resources::Resource;
 use se_gpu::Gpu;
 use se_vm::memory::Slot;
 use se_vm::Vm;
@@ -18,7 +20,12 @@ const ROWS: u32 = 1024;
 /// One game, standing.
 pub struct Live {
     pub vm: Vm,
-    pub gpu: Gpu,
+    /// `Gpu` lives on this worker's own thread for good — nothing outside
+    /// `render_worker.rs` ever touches it again.
+    pub render: RenderWorker,
+    /// Captured from the `Gpu` before it moved to the worker thread; the
+    /// worker itself does not expose a way to ask it back.
+    pub adapter: String,
     /// The render module's `(name, bytes)` as of the last frame that actually
     /// produced a picture — what a GPU timeout rolls back to. `None` until
     /// the first successful render.
@@ -102,16 +109,24 @@ pub fn open(deck: &Deck, opt: &Options, size: (u32, u32), log: &mut Vec<String>)
     }
 
     let (rname, rpath) = pick(src, &out, "render", opt.render.as_deref()).expect("checked");
-    let gpu = make_gpu(&vm, &out, &std::fs::read(rpath)?, size)
+    let mut gpu = make_gpu(&vm, &out, &std::fs::read(rpath)?, size)
         .with_context(|| format!("render/{rname}.wasm"))?;
-    let mut gpu = gpu;
-    load_assets(&mut vm, &mut gpu, src, &out, &mut |l| log.push(l))?;
-    Ok(Live { vm, gpu, last_good_render: None })
+    load_assets(&mut vm, &mut |id, r| gpu.set_resource(id, r), src, &out, &mut |l| log.push(l))?;
+    let adapter = gpu.adapter().to_string();
+    Ok(Live { vm, render: RenderWorker::spawn(gpu), adapter, last_good_render: None })
 }
 
 /// Hand one asset module's payload to where its kind lives: meshes and images
-/// to the GPU, anything else into the arena as a blob. Both are keyed by id.
-pub fn load_asset(vm: &mut Vm, gpu: &mut Gpu, id: u32, name: &str, wasm: &Path) -> Result<String> {
+/// to the GPU (via `set_resource`, which either device uploads directly or
+/// forwards to wherever the device actually lives), anything else into the
+/// arena as a blob. Both are keyed by id.
+pub fn load_asset(
+    vm: &mut Vm,
+    set_resource: &mut dyn FnMut(u32, Resource),
+    id: u32,
+    name: &str,
+    wasm: &Path,
+) -> Result<String> {
     let bytes = std::fs::read(wasm)?;
     vm.check_contract(&format!("asset/{name}"), &bytes)?;
     let payload = se_contract::wasm::section(&bytes, "se.asset")
@@ -123,7 +138,7 @@ pub fn load_asset(vm: &mut Vm, gpu: &mut Gpu, id: u32, name: &str, wasm: &Path) 
     let n = payload.len();
     Ok(match se_gpu::resources::decode(kind, payload).with_context(|| format!("asset/{name}"))? {
         Some(r) => {
-            gpu.set_resource(id, r);
+            set_resource(id, r);
             format!("asset {name}: slot {id}, {kind} (gpu), {n} B")
         }
         None => {
@@ -136,14 +151,14 @@ pub fn load_asset(vm: &mut Vm, gpu: &mut Gpu, id: u32, name: &str, wasm: &Path) 
 /// Every asset of the game, by id (its place among the sorted names).
 pub fn load_assets(
     vm: &mut Vm,
-    gpu: &mut Gpu,
+    set_resource: &mut dyn FnMut(u32, Resource),
     src: &GameSrc,
     out: &Path,
     log: &mut dyn FnMut(String),
 ) -> Result<()> {
     for (i, name) in src.asset_ids().iter().enumerate() {
         let wasm = out.join("asset").join(format!("{name}.wasm"));
-        log(load_asset(vm, gpu, i as u32, name, &wasm)?);
+        log(load_asset(vm, set_resource, i as u32, name, &wasm)?);
     }
     Ok(())
 }

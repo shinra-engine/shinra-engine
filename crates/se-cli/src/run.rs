@@ -15,6 +15,7 @@ use crate::live::open;
 use crate::inspect::{hierarchy, inspect, project_tree, Target};
 use crate::pad::{PadSource, ScriptedPad};
 use crate::reload::{Outcome, Reloader, Selection};
+use crate::render_worker::RenderReply;
 use crate::report;
 use crate::savefile;
 use crate::touch::{keys_of, Touch};
@@ -76,6 +77,11 @@ fn advance_steps(acc: f32, dt: f32) -> (u32, f32) {
 /// Whether there is enough time left before `TARGET` to pay for a render
 /// costing `last_cost`. Computed independently of `advance_steps`: it must
 /// never feed back into the simulation's step count or accumulator.
+///
+/// No longer called from `run()`'s loop — render moved to its own thread, so
+/// the loop never has a render cost to budget against; kept for its own
+/// test coverage below.
+#[allow(dead_code)]
 fn should_skip_render(remaining: Option<Duration>, last_cost: Duration) -> bool {
     remaining.is_some_and(|r| r < last_cost)
 }
@@ -94,7 +100,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
     let mut log = Vec::new();
     let mut live = open(&deck, &opt, screen, &mut log)?;
-    ide.adapter = live.gpu.adapter().to_string();
+    ide.adapter = live.adapter.clone();
     ide.note(format!("gpu: {}", ide.adapter));
     ide.note(format!("deck: {}", ide.games.join(", ")));
     for m in log.drain(..) {
@@ -176,7 +182,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         let want = framebuffer_for(cells.0, cells.1, ide.art);
         if want != screen {
             screen = want;
-            live.gpu.resize(screen.0, screen.1);
+            live.render.resize(screen.0, screen.1);
         }
 
         let now = Instant::now();
@@ -245,35 +251,27 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             report::frame_error(&mut ide, &e, live.vm.take_rollback());
         }
 
-        // Skip the render this iteration when there isn't enough time left
-        // before TARGET to pay for it; the previous `picture` stays on screen
-        // instead of going blank. The simulation accumulator is unaffected.
-        let remaining = TARGET.checked_sub(started.elapsed());
-        let over_budget = should_skip_render(remaining, live.gpu.last_cost());
-        if !over_budget {
-            let px = match command::read(&live.vm.meta, live.vm.bytes()) {
-                Ok((cmds, _)) => {
-                    let rendered = live
-                        .gpu
-                        .replay(&live.vm.meta, &live.vm.world, live.vm.bytes(), &cmds)
-                        .and_then(|_| live.gpu.pixels());
-                    match rendered {
-                        Ok(p) => {
-                            live.cache_render();
-                            Some(p)
-                        }
-                        Err(e) => {
-                            handle_replay_err(&mut live, &mut ide, e);
-                            None
-                        }
-                    }
-                }
-                Err(e) => {
-                    ide.note(format!("commands: {e:#}"));
-                    None
-                }
-            };
-            picture = px.unwrap_or_default();
+        // Render runs on its own thread against a point-in-time snapshot, so
+        // this loop never waits on it: offer the worker the freshest one and
+        // take back whatever picture it last finished. `picture` is left
+        // alone whenever nothing new has arrived — same visual result as the
+        // old time-budget skip, now arising from the worker still being busy
+        // (a full channel) instead of a guess about render cost.
+        match command::read(&live.vm.meta, live.vm.bytes()) {
+            Ok((cmds, _)) => {
+                live.render.try_send_snapshot(live.vm.meta.clone(), live.vm.world.clone(), live.vm.bytes().to_vec(), cmds);
+            }
+            Err(e) => ide.note(format!("commands: {e:#}")),
+        }
+        match live.render.try_recv_reply() {
+            Some(RenderReply::Picture(p)) => {
+                live.cache_render();
+                picture = p;
+            }
+            // task-248 wires this to story-241's reload-last-good-module policy.
+            Some(RenderReply::TimedOut) => ide.note("replay: GPU timed out".to_string()),
+            Some(RenderReply::Failed(e)) => ide.note(format!("replay: {e}")),
+            None => {}
         }
 
         ide.frame = index;
@@ -320,6 +318,13 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
 
 /// A GPU timeout with a cache rolls the render slot back to the last-good
 /// module (a CPU trap's recovery); anything else is the existing generic note.
+///
+/// Not yet called from `run()`'s loop: the worker thread already classifies
+/// a replay failure into `RenderReply::TimedOut`/`Failed` before it reaches
+/// the main thread, so there is no `anyhow::Error` left to downcast there.
+/// task-248 wires `RenderReply::TimedOut` to this same rollback; kept here,
+/// still exercised by its own tests below, until that lands.
+#[allow(dead_code)]
 fn handle_replay_err(live: &mut crate::live::Live, ide: &mut se_tui::Ide, e: anyhow::Error) {
     if matches!(e.downcast_ref::<PollError>(), Some(PollError::Timeout)) && live.last_good_render.is_some() {
         match live.rollback_render() {

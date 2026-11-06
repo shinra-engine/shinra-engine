@@ -1,16 +1,16 @@
-//! Render on its own thread, built but not yet wired into `run.rs` (task-247).
+//! Render on its own thread, wired into `run.rs`/`live.rs`/`swap.rs` by
+//! task-247.
 //!
 //! `Gpu` moves into the thread closure for good: nothing outside this file
 //! ever touches it again. The main thread hands over a point-in-time
 //! snapshot — `Meta`/`World` cloned, `Vm::bytes()` copied, commands already
 //! decoded — never a live view into memory the next `tick()` will mutate.
-//!
-//! Nothing in the rest of the crate calls into this module yet, so a plain
-//! build reports its public surface as unused; `#![allow(dead_code)]` defers
-//! that to task-247, which wires it into `run.rs`/`live.rs`.
-#![allow(dead_code)]
+//! A render-module swap or an asset hot-reload reaches the same `Gpu` the
+//! same way, through `Replace`/`SetResource`, since nothing outside this
+//! thread may hold the `Gpu` itself.
 
 use se_gpu::command::Command;
+use se_gpu::resources::Resource;
 use se_gpu::Gpu;
 use se_vm::world::{Meta, World};
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError};
@@ -18,9 +18,15 @@ use std::thread::JoinHandle;
 
 pub enum RenderRequest {
     Snapshot { meta: Meta, world: World, mem: Vec<u8>, cmds: Vec<Command> },
-    /// Not yet sent by anything — `run.rs` still resizes `Live::gpu` directly
-    /// until task-247 moves it behind this worker.
     Resize(u32, u32),
+    /// A render-module swap builds the replacement `Gpu` on the main thread
+    /// (it needs no device the worker doesn't also have) and hands it over
+    /// whole; the worker never gives one back.
+    Replace(Gpu),
+    /// An asset hot-reload's decoded (CPU-side) mesh/texture, for the worker
+    /// to upload — `Gpu::set_resource` is where bytes actually become device
+    /// resources, and that only ever happens on the thread that owns `Gpu`.
+    SetResource(u32, Resource),
 }
 
 pub enum RenderReply {
@@ -35,6 +41,9 @@ pub enum RenderReply {
 pub struct RenderWorker {
     tx: SyncSender<RenderRequest>,
     rx: Receiver<RenderReply>,
+    /// Never joined — dropping `tx` ends the thread on its own. Kept so a
+    /// future graceful-shutdown path has it to join.
+    #[allow(dead_code)]
     handle: JoinHandle<()>,
 }
 
@@ -58,6 +67,8 @@ impl RenderWorker {
             while let Ok(req) = work_rx.recv() {
                 match req {
                     RenderRequest::Resize(w, h) => gpu.resize(w, h),
+                    RenderRequest::Replace(g) => gpu = g,
+                    RenderRequest::SetResource(id, r) => gpu.set_resource(id, r),
                     RenderRequest::Snapshot { meta, world, mem, cmds } => {
                         let reply = reply_for(&mut gpu, &meta, &world, &mem, &cmds);
                         if reply_tx.send(reply).is_err() {
@@ -88,6 +99,24 @@ impl RenderWorker {
             Ok(r) => Some(r),
             Err(TryRecvError::Empty) | Err(TryRecvError::Disconnected) => None,
         }
+    }
+
+    /// A viewport resize. Rare and user/terminal-driven, so this blocks
+    /// rather than risking a dropped resize the way a full snapshot can be
+    /// dropped every frame.
+    pub fn resize(&self, w: u32, h: u32) {
+        let _ = self.tx.send(RenderRequest::Resize(w, h));
+    }
+
+    /// Hand the worker a freshly built `Gpu` — a render-module swap's result.
+    pub fn replace(&self, gpu: Gpu) {
+        let _ = self.tx.send(RenderRequest::Replace(gpu));
+    }
+
+    /// Hand the worker a decoded asset to upload — an asset hot-reload's
+    /// result.
+    pub fn set_resource(&self, id: u32, resource: Resource) {
+        let _ = self.tx.send(RenderRequest::SetResource(id, resource));
     }
 }
 

@@ -75,6 +75,7 @@ fn advance_steps_carries_a_partial_step_to_the_next_call() {
 mod replay_err {
     use super::*;
     use crate::live::Live;
+    use crate::render_worker::RenderWorker;
     use se_vm::memory::STACK_SIZE;
     use se_vm::Vm;
     use std::path::{Path, PathBuf};
@@ -158,7 +159,13 @@ fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(cam.fov, 0.0, 0.0, 1.0
         vm.load(Slot::Render, "render_bad", bad)?;
 
         let gpu = se_gpu::Gpu::new(&vm.meta, &format!("{}\n{SHADER}", g.wgsl), 4, 4)?;
-        Ok(Live { vm, gpu, last_good_render: Some(("render_good".to_string(), good)) })
+        let adapter = gpu.adapter().to_string();
+        Ok(Live {
+            vm,
+            render: RenderWorker::spawn(gpu),
+            adapter,
+            last_good_render: Some(("render_good".to_string(), good)),
+        })
     }
 
     fn render_name(live: &Live) -> Option<&str> {
