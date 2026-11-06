@@ -11,6 +11,7 @@
 //! reason the host does not compile a `contract.rs` in.
 
 pub mod command;
+mod history;
 mod pass;
 mod pipeline;
 pub mod replay;
@@ -38,15 +39,6 @@ pub struct Target {
     readback: wgpu::Buffer,
 }
 
-/// A lazily-created offscreen render target (ids 1..=8). Unlike the present
-/// `Target`, it is only ever sampled by a later pass, never read back to the
-/// CPU, so it carries no readback buffer. The view keeps its texture alive.
-struct Offscreen {
-    width: u32,
-    height: u32,
-    view: wgpu::TextureView,
-}
-
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
@@ -54,7 +46,7 @@ pub struct Gpu {
     target: Target,
     /// Offscreen targets 1..=8, created the first time a command names them
     /// and dropped wholesale by `resize()` so a stale size is never read.
-    offscreen: HashMap<u32, Offscreen>,
+    offscreen: HashMap<u32, history::History>,
     /// One `Depth32Float` view per target id (0 = present, 1..=8 offscreen),
     /// created the first time a depth-flagged pass names that target and
     /// dropped wholesale by `resize()` alongside `offscreen`, so a stale size
@@ -92,7 +84,7 @@ pub const UNIFORM_BYTES: u32 = 256;
 /// `TARGET`/`WATCH`, not empirically measured the way `DEFAULT_FUEL` was.
 pub const GPU_BUDGET: Duration = Duration::from_secs(2);
 
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(crate) const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 impl Gpu {
@@ -318,15 +310,10 @@ impl Gpu {
         }
         if !self.offscreen.contains_key(&id) {
             let (width, height) = (self.target.width, self.target.height);
-            let (_, view) = Self::make_texture(
-                &self.device,
-                width,
-                height,
-                wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            );
-            self.offscreen.insert(id, Offscreen { width, height, view });
+            let h = history::History::new(&self.device, width, height);
+            self.offscreen.insert(id, h);
         }
-        &self.offscreen[&id].view
+        &self.offscreen[&id].cur_view
     }
 
     /// Resolve a target id to its depth view, created lazily the first time a
