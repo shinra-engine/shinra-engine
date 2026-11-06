@@ -110,6 +110,17 @@ impl Areas {
             .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)))
     }
 
+    /// The viewport inner rect's top-left origin, in terminal cells — the
+    /// same 1-cell border exclusion `viewport_inner` applies to the size, so
+    /// a cell's offset into the pair `(viewport_origin, viewport_inner)` is
+    /// its position in viewport-local space.
+    pub fn viewport_origin(&self) -> Option<(u16, u16)> {
+        self.rects
+            .iter()
+            .find(|(p, _)| *p == Panel::Viewport)
+            .map(|(_, r)| (r.x.saturating_add(1), r.y.saturating_add(1)))
+    }
+
     pub fn panel_at(&self, col: u16, row: u16) -> Option<Panel> {
         self.rects
             .iter()
@@ -265,6 +276,21 @@ pub fn draw(f: &mut Frame, ide: &Ide, px: Option<&Pixels>) -> Areas {
 mod tests {
     use super::*;
     use ratatui::backend::TestBackend;
+
+    #[test]
+    fn viewport_origin_is_the_inner_rect_top_left() {
+        let areas = Areas {
+            rects: [
+                (Panel::Hierarchy, Rect { x: 0, y: 1, width: 20, height: 24 }),
+                (Panel::Viewport, Rect { x: 20, y: 1, width: 60, height: 24 }),
+                (Panel::Inspector, Rect { x: 80, y: 1, width: 20, height: 24 }),
+                (Panel::Project, Rect { x: 0, y: 25, width: 30, height: 10 }),
+                (Panel::Terminal, Rect { x: 30, y: 25, width: 70, height: 10 }),
+            ],
+        };
+        assert_eq!(areas.viewport_origin(), Some((21, 2)));
+        assert_eq!(areas.viewport_inner(), Some((58, 22)));
+    }
 
     #[test]
     fn an_error_draws_red_one_line_at_a_time() {
