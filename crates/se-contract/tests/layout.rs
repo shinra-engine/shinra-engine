@@ -103,6 +103,19 @@ fn render_command_is_64_bytes_with_the_offscreen_target_fields() {
 }
 
 #[test]
+fn sound_is_a_12_byte_control_var_with_no_padding() {
+    let g = gen();
+    // All three fields are 4-byte-aligned u32/f32, so std430 packs them
+    // back-to-back with no padding — unlike `transform`'s vec3 fields above.
+    let r = g.contract.of("control").find(|r| r.name == "sound").expect("sound");
+    let at = |name: &str| r.fields.iter().find(|f| f.name == name).unwrap().offset;
+    assert_eq!(at("seq"), 0);
+    assert_eq!(at("id"), 4);
+    assert_eq!(at("gain"), 8);
+    assert_eq!(r.size, 12);
+}
+
+#[test]
 fn the_shader_sees_components_and_control_and_nothing_else() {
     let g = gen();
     assert!(g.wgsl.contains("struct Transform {"));

@@ -45,6 +45,14 @@ interface control {
     mouse-y: f32,
     mouse-down: u32,
   }
+
+  /// A sound request. `seq` is bumped by the writer on every request so the
+  /// host can edge-detect a new one by inequality rather than polling a
+  /// one-shot flag; a game that never touches `sound` never triggers it.
+  /// `id` names an asset slot (sample bytes live in an asset blob, resolved
+  /// by the host after the tick), `gain` is linear volume. One request per
+  /// frame — latest wins.
+  record sound { seq: u32, id: u32, gain: f32 }
 }
 
 /// render.wasm records; the host replays. Fixed-size commands, so the host
