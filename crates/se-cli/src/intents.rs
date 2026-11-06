@@ -73,3 +73,44 @@ pub fn apply(it: Intent, ide: &mut Ide, vm: &mut Vm, row_map: &[Option<Target>],
         None => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::layout::Rect;
+
+    /// Edit-mode regression for story-65: the touch/pointer work in
+    /// `se-tui::term` and `se-cli::touch` only adds `Keys.mouse*`
+    /// alongside `Intent::click` (term.rs still sets it on every
+    /// `MouseEventKind::Down`). A click must keep moving IDE focus here.
+    #[test]
+    fn edit_mode_click_still_changes_panel_focus() {
+        let areas = Areas {
+            rects: [
+                (Panel::Hierarchy, Rect { x: 0, y: 1, width: 20, height: 24 }),
+                (Panel::Viewport, Rect { x: 20, y: 1, width: 60, height: 24 }),
+                (Panel::Inspector, Rect { x: 80, y: 1, width: 20, height: 24 }),
+                (Panel::Project, Rect { x: 0, y: 25, width: 30, height: 10 }),
+                (Panel::Terminal, Rect { x: 30, y: 25, width: 70, height: 10 }),
+            ],
+        };
+        let mut ide = Ide::default();
+        assert_eq!(ide.mode, Mode::Edit, "IDE opens in Edit mode");
+        ide.focused = Panel::Viewport;
+
+        let wit = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../se-contract/tests/game1.wit");
+        let g = se_contract::generate(&wit).expect("fixture contract generates");
+        let mut vm = Vm::new(&g.module, 1).expect("fixture contract loads");
+
+        // A click inside the Inspector rect (85, 5) must move focus there,
+        // same as before touch's pointer state machine existed.
+        let it = Intent {
+            click: Some((85, 5)),
+            ..Default::default()
+        };
+        apply(it, &mut ide, &mut vm, &[], &areas);
+
+        assert_eq!(ide.focused, Panel::Inspector);
+    }
+}
