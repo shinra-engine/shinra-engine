@@ -158,3 +158,33 @@ fn flag_prev_naming_the_present_target_is_refused() -> Result<()> {
     assert!(format!("{e:#}").contains("FLAG_PREV"), "{e:#}");
     Ok(())
 }
+
+#[test]
+fn resize_clears_history_so_flag_prev_reads_zero_not_the_old_frame() -> Result<()> {
+    let (vm, mut gpu) = rig(16, 16)?;
+
+    // Target 3 gets a saturated, distinctive colour, so a stale post-resize
+    // read would be unmistakable rather than coincidentally close to `want`.
+    let frame1_target = Command { target: 3, clear: [1.0, 0.0, 1.0, 1.0], ..cmd(BEGIN_PASS) };
+    gpu.replay(&vm.meta, &vm.world, vm.bytes(), &[frame1_target, cmd(END_PASS)])?;
+
+    // `Gpu::resize` drops every offscreen target wholesale (see its doc: "a
+    // stale offscreen target's size... must never be read back"), so target
+    // 3's history is gone, not merely resized in place.
+    gpu.resize(32, 32);
+
+    let present = Command { target: 0, clear: [0.2, 0.4, 0.6, 1.0], ..cmd(BEGIN_PASS) };
+    let read_prev =
+        Command { kind: DRAW_FULLSCREEN, sample: 3, render_flags: FLAG_PREV, ..cmd(0) };
+    gpu.replay(&vm.meta, &vm.world, vm.bytes(), &[present, read_prev, cmd(END_PASS)])?;
+    let px = gpu.pixels()?;
+    let got = first_pixel(&px);
+    let want = [51, 102, 153, 255];
+    let near = got.iter().zip(want).all(|(g, w)| g.abs_diff(w) <= 16);
+    assert!(
+        near,
+        "resize must re-zero target 3's history; a stale magenta carry-over would show up as \
+         opaque magenta, got {got:?}"
+    );
+    Ok(())
+}
