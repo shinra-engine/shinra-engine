@@ -2,9 +2,10 @@
 //!
 //! `cur` is this frame's render target, exactly as before. `prev` holds what
 //! `cur` looked like after the *previous* frame finished, so a later pass can
-//! fade or blend against it. Nothing copies `cur` into `prev` yet — that is
-//! wired in a later ticket — this module only allocates the pair, keeps both
-//! zeroed until first drawn, and recreates them (still zeroed) on resize.
+//! fade or blend against it. This module allocates the pair, keeps both
+//! zeroed until first drawn, and recreates them (still zeroed) on resize; the
+//! end-of-frame `cur` -> `prev` copy and the `FLAG_PREV` read of `prev_view`
+//! live in `Gpu` (`lib.rs::copy_history`/`prev_view`) and `replay.rs`.
 
 use crate::FORMAT;
 use anyhow::Result;
@@ -14,10 +15,6 @@ use anyhow::Result;
 /// pass, never read back to the CPU during replay, so it carries no
 /// present-style readback buffer of its own.
 ///
-/// `cur_texture`, `prev_texture`, and `prev_view` are not read by replay yet
-/// — only this module's own tests use them, until a later ticket wires the
-/// frame-end `cur` -> `prev` copy and the sampling that reads `prev_view`.
-#[allow(dead_code)]
 pub(crate) struct History {
     pub(crate) width: u32,
     pub(crate) height: u32,

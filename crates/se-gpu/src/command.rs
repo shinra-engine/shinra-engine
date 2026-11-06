@@ -21,6 +21,12 @@ pub const NONE: u32 = u32::MAX;
 /// `BEGIN_PASS.render_flags` bit 0: attach a `Depth32Float` buffer to this
 /// pass, cleared to 1.0, compare `Less`, write on for instanced draws.
 pub const FLAG_DEPTH: u32 = 1;
+/// A draw's `render_flags` bit 1: bind `sample`'s PREV history texture (last
+/// frame's content for that target) in bind group 1, instead of resolving
+/// `sample` against a pass this same frame already wrote. Requires `sample`
+/// to name an offscreen target (not 0, the present target, which keeps no
+/// history).
+pub const FLAG_PREV: u32 = 2;
 
 /// `render::command`, as this engine reads it.
 const COMMAND_FIELDS: [(&str, u32); 16] = [
@@ -69,8 +75,9 @@ pub struct Command {
     /// Target id to sample from an earlier pass this frame, or 0 for none.
     /// Not yet acted on by replay.
     pub sample: u32,
-    /// Bit 0 (`FLAG_DEPTH`) requests a depth attachment for this pass; see
-    /// `FLAG_DEPTH`. Other bits reserved.
+    /// Bit 0 (`FLAG_DEPTH`) requests a depth attachment for a `BEGIN_PASS`;
+    /// bit 1 (`FLAG_PREV`) makes a draw's `sample` read that target's
+    /// previous-frame history. Other bits reserved.
     pub render_flags: u32,
 }
 

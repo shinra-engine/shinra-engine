@@ -14,6 +14,7 @@ pub mod command;
 mod history;
 mod pass;
 mod pipeline;
+mod readback;
 pub mod replay;
 pub mod resources;
 
@@ -308,12 +309,37 @@ impl Gpu {
         if id == 0 {
             return &self.target.view;
         }
+        self.ensure_offscreen(id);
+        &self.offscreen[&id].cur_view
+    }
+
+    /// Lazily creates `id`'s history pair at the present target's current
+    /// size, exactly once, so `target_view` and a `FLAG_PREV` read of
+    /// `offscreen[&id].prev_view` agree on it. `pub(crate)` and separate from
+    /// a `prev_view`-style accessor: a caller that also needs to borrow other
+    /// `self` fields alongside the result (as `replay::bind_for` does for the
+    /// bind group's uniform/sampler) calls this first, mutably, then borrows
+    /// `offscreen[&id]` itself immutably — avoiding a borrow that would
+    /// otherwise span both.
+    pub(crate) fn ensure_offscreen(&mut self, id: u32) {
         if !self.offscreen.contains_key(&id) {
             let (width, height) = (self.target.width, self.target.height);
             let h = history::History::new(&self.device, width, height);
             self.offscreen.insert(id, h);
         }
-        &self.offscreen[&id].cur_view
+    }
+
+    /// Copies `id`'s `cur` texture into its `prev` texture, in `enc`. Call
+    /// once per offscreen target a frame wrote, after every pass is encoded
+    /// and before the encoder is submitted, so the next frame's `prev` read
+    /// sees this frame's finished `cur`.
+    pub(crate) fn copy_history(&self, enc: &mut wgpu::CommandEncoder, id: u32) {
+        let h = &self.offscreen[&id];
+        enc.copy_texture_to_texture(
+            h.cur_texture.as_image_copy(),
+            h.prev_texture.as_image_copy(),
+            wgpu::Extent3d { width: h.width, height: h.height, depth_or_array_layers: 1 },
+        );
     }
 
     /// Resolve a target id to its depth view, created lazily the first time a
@@ -347,36 +373,5 @@ impl Gpu {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    fn gpu(w: u32, h: u32) -> Result<Gpu> {
-        let wit =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
-        let g = se_contract::generate(&wit)?;
-        let vm = se_vm::Vm::new(&g.module, 1)?;
-        Gpu::new(&vm.meta, &g.wgsl, w, h)
-    }
-
-    #[test]
-    fn target_view_resolves_caches_and_drops_on_resize() -> Result<()> {
-        let mut g = gpu(16, 16)?;
-
-        let present = g.target_view(0).clone();
-        assert_eq!(present, g.target.view);
-
-        let first = g.target_view(5).clone();
-        assert_ne!(first, present, "an offscreen target is not the present one");
-        assert_eq!((g.offscreen[&5].width, g.offscreen[&5].height), (16, 16));
-
-        let second = g.target_view(5).clone();
-        assert_eq!(first, second, "a second resolve must reuse the cached target");
-
-        g.resize(32, 32);
-        let third = g.target_view(5).clone();
-        assert_ne!(third, first, "resize must drop the stale-sized offscreen target");
-        assert_eq!((g.offscreen[&5].width, g.offscreen[&5].height), (32, 32));
-        Ok(())
-    }
-}
+#[path = "lib_tests.rs"]
+mod tests;

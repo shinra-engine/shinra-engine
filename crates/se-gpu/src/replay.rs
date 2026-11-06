@@ -5,14 +5,14 @@
 //! WebGPU call it names, and to hand the GPU the column bytes exactly as the
 //! stage left them.
 
-use crate::command::{Command, DRAW_FULLSCREEN, DRAW_INSTANCED, NONE};
+use crate::command::{Command, DRAW_FULLSCREEN, DRAW_INSTANCED, FLAG_PREV, NONE};
 use crate::pass::{self, group_passes};
 use crate::resources::Loaded;
-use crate::{Gpu, GPU_BUDGET, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
+use crate::{Gpu, INSTANCE_BYTES, UNIFORM_BYTES, UNIFORM_SLOTS};
 use anyhow::{bail, Context, Result};
 use se_vm::world::{Meta, World, COLUMN_BYTES};
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 /// What one replayed frame did, so a caller can assert on it without reading
 /// pixels back.
@@ -240,6 +240,17 @@ impl Gpu {
                 }
             }
         }
+
+        // Every offscreen target this frame drew into gets its `cur` copied
+        // into `prev`, in this same encoder, before submit — so the next
+        // frame's FLAG_PREV read sees this frame's finished content, not a
+        // stale or half-drawn one. The present target (0) keeps no history.
+        let written_targets: HashSet<u32> =
+            groups.iter().map(|g| g.target).filter(|&t| t != 0).collect();
+        for id in written_targets {
+            self.copy_history(&mut enc, id);
+        }
+
         enc.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.target.texture,
@@ -289,18 +300,35 @@ impl Gpu {
         Ok(())
     }
 
-    /// Uniform, the draw's texture (or an earlier pass's target, or white)
-    /// and the sampler. `written` maps a target id to the index into `views`
-    /// of the most recent pass group, strictly before the one `d` belongs
-    /// to, that wrote it — a `DRAW_FULLSCREEN` naming an id missing from it
-    /// is refused rather than reading the current or a future pass's target.
+    /// Uniform, the draw's texture (or an earlier pass's target, or that
+    /// target's previous-frame history, or white) and the sampler. `written`
+    /// maps a target id to the index into `views` of the most recent pass
+    /// group, strictly before the one `d` belongs to, that wrote it this
+    /// frame — a `DRAW_FULLSCREEN` naming an id missing from it is refused
+    /// rather than reading the current or a future pass's target. A draw
+    /// with `FLAG_PREV` set instead reads `sample`'s PREV texture directly,
+    /// regardless of whether (or when) this frame writes that target's CUR.
     fn bind_for(
-        &self,
+        &mut self,
         d: &Command,
         written: &HashMap<u32, usize>,
         views: &[wgpu::TextureView],
     ) -> Result<wgpu::BindGroup> {
-        let view = if d.kind == DRAW_FULLSCREEN && d.sample != NONE {
+        let view = if d.kind == DRAW_FULLSCREEN && d.render_flags & FLAG_PREV != 0 {
+            if d.texture != NONE {
+                bail!("a draw cannot set both `texture` and `sample`")
+            }
+            if d.sample == NONE || d.sample == 0 {
+                bail!(
+                    "draw sets FLAG_PREV but `sample` names no offscreen target to read history from"
+                )
+            }
+            // Ensure the entry exists (a mutable call, dropped immediately)
+            // before borrowing it immutably alongside the bind group's other
+            // fields below.
+            self.ensure_offscreen(d.sample);
+            &self.offscreen[&d.sample].prev_view
+        } else if d.kind == DRAW_FULLSCREEN && d.sample != NONE {
             if d.texture != NONE {
                 bail!("a draw cannot set both `texture` and `sample`")
             }
@@ -339,57 +367,5 @@ impl Gpu {
                 },
             ],
         }))
-    }
-
-    /// The rendered image, RGBA8. Offscreen for now — a window is the same
-    /// replay against a surface texture.
-    ///
-    /// Adds its elapsed time to `last_cost` rather than replacing it, so
-    /// after a `replay()` then `pixels()` call pair, `last_cost()` reflects
-    /// both.
-    pub fn pixels(&self) -> Result<Vec<u8>> {
-        let start = Instant::now();
-        let result = self.pixels_with_budget(GPU_BUDGET);
-        self.last_cost.set(self.last_cost.get() + start.elapsed());
-        result
-    }
-
-    /// Cost of the most recent `replay()` + `pixels()` call pair. Resets at
-    /// the start of each `replay()` call, so this is never a running total
-    /// across many frames.
-    pub fn last_cost(&self) -> std::time::Duration {
-        self.last_cost.get()
-    }
-
-    /// `pixels()`'s body, with the wall-clock budget as a parameter. A test
-    /// can pass `Duration::ZERO` to force `wgpu::PollError::Timeout`
-    /// deterministically — a submission just queued cannot be seen complete
-    /// in a zero-length wait — without blocking for the real `GPU_BUDGET`.
-    pub fn pixels_with_budget(&self, budget: Duration) -> Result<Vec<u8>> {
-        let slice = self.target.readback.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        self.device
-            .poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(budget),
-            })
-            .map_err(|e| {
-                if matches!(e, wgpu::PollError::Timeout) {
-                    anyhow::Error::new(e)
-                        .context(format!("GPU replay exceeded its {budget:?} budget"))
-                } else {
-                    e.into()
-                }
-            })?;
-        let padded = slice.get_mapped_range().to_vec();
-        self.target.readback.unmap();
-        // Drop the row padding the copy required.
-        let w = (self.target.width * 4) as usize;
-        let stride = self.target.row_bytes as usize;
-        let mut out = Vec::with_capacity(w * self.target.height as usize);
-        for y in 0..self.target.height as usize {
-            out.extend_from_slice(&padded[y * stride..y * stride + w]);
-        }
-        Ok(out)
     }
 }
