@@ -13,6 +13,7 @@ pub mod slot;
 pub mod state;
 pub mod textart;
 pub mod term;
+pub mod touch;
 
 pub use ide::{draw, Areas};
 pub use log::{Level, LogLine};
