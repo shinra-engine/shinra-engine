@@ -197,3 +197,122 @@ fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(cam.fov, 0.0, 0.0, 1.0
         Ok(())
     }
 }
+
+/// Proves the decoupling task-245 built actually holds against a real render
+/// thread, not only against the pure-function model
+/// `render_skip_does_not_change_the_simulation_clock_sequence` exercises
+/// above: the sequence of `Clock` values driven into `Vm::frame` must be
+/// identical whether the render worker replies to a snapshot instantly or
+/// only after an injected delay. `try_send_snapshot` and `try_recv_reply` are
+/// both non-blocking at the same call site `run()`'s loop uses them from, and
+/// neither one ever feeds back into `acc`, `index`, or the value handed to
+/// `vm.frame` — this test drives that through a real thread instead of only
+/// reasoning about it.
+mod threaded_render {
+    use super::*;
+    use crate::render_worker::RenderWorker;
+    use se_gpu::command::{Command, BEGIN_PASS, DRAW_INSTANCED, END_PASS};
+    use se_gpu::Gpu;
+    use se_vm::Vm;
+    use std::path::PathBuf;
+
+    /// `TransformInstance` and `Camera` come from the prepended `contract.wgsl`,
+    /// same fixture `render_worker/tests.rs` uses.
+    const SHADER: &str = r#"@group(0) @binding(0) var<uniform> cam: Camera;
+struct VsOut { @builtin(position) clip: vec4<f32>, @location(0) tint: vec3<f32> };
+@vertex
+fn vs_main(@builtin(vertex_index) vi: u32, inst: TransformInstance) -> VsOut {
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(-0.6, -0.5), vec2<f32>(0.6, -0.5), vec2<f32>(0.0, 0.6));
+    let c = corners[vi] * clamp(inst.scale.x, 0.02, 1.0);
+    var o: VsOut;
+    o.clip = vec4<f32>(vec2<f32>(inst.pos.x, inst.pos.y) + c, 0.0, 1.0);
+    o.tint = vec3<f32>(clamp(inst.scale.x * 2.0, 0.0, 1.0), cam.fov, inst.rot.w);
+    return o;
+}
+@fragment
+fn fs_main(i: VsOut) -> @location(0) vec4<f32> { return vec4<f32>(i.tint, 1.0); }
+"#;
+
+    fn cmd(kind: u32) -> Command {
+        Command {
+            kind,
+            vertices: 0,
+            shader: 0,
+            column: u32::MAX,
+            count: 0,
+            uniform_off: 0,
+            uniform_len: 0,
+            mesh: u32::MAX,
+            texture: u32::MAX,
+            target: 0,
+            sample: 0,
+            render_flags: 0,
+            clear: [0.2, 0.4, 0.6, 1.0],
+        }
+    }
+
+    /// A fresh `Vm` with no game/process/render module loaded — `tick`,
+    /// stages, and `record` are then all no-ops per `Vm::call`'s "an empty
+    /// slot is not an error" — a real headless `Gpu`, and a fixed, always-
+    /// valid command list standing in for what `record()` would write. This
+    /// test drives `Clock` timing through a real render thread; it does not
+    /// need the command list to come from an actual simulated draw.
+    fn rig() -> anyhow::Result<(Vm, Gpu, Vec<Command>)> {
+        let wit = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../se-contract/tests/game1.wit");
+        let g = se_contract::generate(&wit)?;
+        let column = g.contract.components().iter().position(|r| r.name == "transform").unwrap() as u32;
+        let vm = Vm::new(&g.module, 8)?;
+        let gpu = Gpu::new(&vm.meta, &format!("{}\n{SHADER}", g.wgsl), 16, 16)?;
+        let draw = Command { column, count: 1, ..cmd(DRAW_INSTANCED) };
+        let cmds = vec![cmd(BEGIN_PASS), draw, cmd(END_PASS)];
+        Ok((vm, gpu, cmds))
+    }
+
+    /// Drives `dts` through the same shape as `run()`'s loop body: for each
+    /// `dt`, `advance_steps` decides how many fixed sim steps to take; each
+    /// one calls `vm.frame(index)`, recorded here as the `Clock` it implies,
+    /// then — independent of that, exactly as `run()`'s render call site does
+    /// — offers `worker` the current snapshot and polls its last reply.
+    fn simulate(vm: &mut Vm, cmds: &[Command], worker: &RenderWorker, dts: &[f32]) -> Vec<se_vm::clock::Clock> {
+        let mut acc = 0f32;
+        let mut index = 0u32;
+        let mut clocks = Vec::new();
+        for &dt in dts {
+            let (steps, new_acc) = advance_steps(acc, dt);
+            acc = new_acc;
+            for _ in 0..steps {
+                vm.frame(index).expect("frame");
+                clocks.push(se_vm::clock::Clock::at(index));
+                index += 1;
+            }
+            worker.try_send_snapshot(vm.meta.clone(), vm.world.clone(), vm.bytes().to_vec(), cmds.to_vec());
+            let _ = worker.try_recv_reply();
+        }
+        clocks
+    }
+
+    #[test]
+    fn render_thread_lag_does_not_change_the_simulation_clock_sequence() -> anyhow::Result<()> {
+        let dts = [0.016, 0.033, 0.05, 0.016, 0.1, 0.016, 0.0, 0.2, 0.016];
+
+        let (mut vm, gpu, cmds) = rig()?;
+        let worker = RenderWorker::spawn(gpu);
+        let baseline = simulate(&mut vm, &cmds, &worker, &dts);
+
+        // Representative of a slow-but-healthy render: comfortably longer
+        // than one loop iteration here (so the bound-1 channel is sometimes
+        // still full on the next send, exercising the real drop-and-skip
+        // path) yet well under story-241's two-second GPU_BUDGET.
+        let delay = Duration::from_millis(80);
+        let (mut vm2, gpu2, cmds2) = rig()?;
+        let worker2 = RenderWorker::spawn_with_delay(gpu2, delay);
+        let with_lag = simulate(&mut vm2, &cmds2, &worker2, &dts);
+
+        assert_eq!(
+            baseline, with_lag,
+            "Clock sequence into Vm::frame must not depend on render thread timing"
+        );
+        Ok(())
+    }
+}

@@ -60,7 +60,21 @@ fn reply_for(gpu: &mut Gpu, meta: &Meta, world: &World, mem: &[u8], cmds: &[Comm
 
 impl RenderWorker {
     /// Moves `gpu` onto a new thread and starts its request/reply loop.
-    pub fn spawn(mut gpu: Gpu) -> RenderWorker {
+    pub fn spawn(gpu: Gpu) -> RenderWorker {
+        Self::spawn_loop(gpu, std::time::Duration::ZERO)
+    }
+
+    /// Test-only seam: behaves exactly like `spawn`, but sleeps `delay` before
+    /// replying to each snapshot — standing in for a slow (but within
+    /// story-241's `GPU_BUDGET`) render without relying on real GPU/wgpu
+    /// timing, which is too fast and machine-dependent to drive a
+    /// deterministic test.
+    #[cfg(test)]
+    pub fn spawn_with_delay(gpu: Gpu, delay: std::time::Duration) -> RenderWorker {
+        Self::spawn_loop(gpu, delay)
+    }
+
+    fn spawn_loop(mut gpu: Gpu, delay: std::time::Duration) -> RenderWorker {
         let (tx, work_rx) = std::sync::mpsc::sync_channel::<RenderRequest>(1);
         let (reply_tx, rx) = std::sync::mpsc::sync_channel::<RenderReply>(1);
         let handle = std::thread::spawn(move || {
@@ -70,6 +84,9 @@ impl RenderWorker {
                     RenderRequest::Replace(g) => gpu = g,
                     RenderRequest::SetResource(id, r) => gpu.set_resource(id, r),
                     RenderRequest::Snapshot { meta, world, mem, cmds } => {
+                        if !delay.is_zero() {
+                            std::thread::sleep(delay);
+                        }
                         let reply = reply_for(&mut gpu, &meta, &world, &mem, &cmds);
                         if reply_tx.send(reply).is_err() {
                             break;
