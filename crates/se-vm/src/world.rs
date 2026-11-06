@@ -53,6 +53,7 @@ fn check_handle(t: &Table, name: &str, want: &[(&str, u32)], size: u32) -> Resul
 /// The table borrows the bytes it was read from, which would tie every call
 /// that also needs `&mut Store` in a knot for no gain: the contract does not
 /// change while a game runs, so it is decoded at load and kept.
+#[derive(Clone)]
 pub struct Meta {
     pub base: u32,
     pub frame: u32,
@@ -131,6 +132,7 @@ impl Meta {
     }
 }
 
+#[derive(Clone)]
 pub struct World {
     /// One length per pool, mirrored from the arena so the host need not read
     /// it back to make a decision.

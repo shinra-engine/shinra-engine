@@ -23,6 +23,7 @@ mod intents;
 mod live;
 mod pad;
 mod reload;
+mod render_worker;
 mod report;
 mod run;
 mod savefile;
