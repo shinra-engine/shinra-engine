@@ -60,6 +60,7 @@ impl Vm {
             rolled_back: None,
             contract_id,
             overruns: Vec::new(),
+            last_sound_seq: 0,
         })
     }
 
