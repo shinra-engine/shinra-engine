@@ -72,6 +72,26 @@ fn edit_mode_never_reports_down() {
 }
 
 #[test]
+fn switching_to_edit_mid_press_drops_down_immediately() {
+    let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
+    p.feed(MouseEventKind::Down(MouseButton::Left), 6, 6);
+    let (_, down) = t.update(true, &v, &p);
+    assert_eq!(down, 1, "started inside during Play — down");
+    p.feed(MouseEventKind::Drag(MouseButton::Left), 6, 6);
+    let (_, down) = t.update(false, &v, &p);
+    assert_eq!(
+        down, 0,
+        "mode switched to Edit mid-press with no release — down drops immediately"
+    );
+    p.feed(MouseEventKind::Drag(MouseButton::Left), 6, 6);
+    let (_, down) = t.update(true, &v, &p);
+    assert_eq!(
+        down, 1,
+        "switching back to Play within the same press restores down"
+    );
+}
+
+#[test]
 fn release_requires_a_fresh_press_to_go_down_again() {
     let (mut p, mut t, v) = (Pointer::new(), Touch::new(), viewport());
     p.feed(MouseEventKind::Down(MouseButton::Left), 6, 6);

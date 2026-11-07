@@ -63,7 +63,7 @@ impl Touch {
             self.started_inside = play && hit.is_some();
         }
         self.was_held = held;
-        let mouse_down = (held && self.started_inside) as u32;
+        let mouse_down = (held && play && self.started_inside) as u32;
         ([self.pos.0, self.pos.1], mouse_down)
     }
 }
