@@ -22,7 +22,7 @@ pub use replay::Report;
 pub use resources::Resource;
 use resources::Loaded;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -345,14 +345,21 @@ impl Gpu {
     /// Resolve a target id to its depth view, created lazily the first time a
     /// depth-flagged pass names that target, sized to the target's current
     /// dimensions. Call only after `target_view(id)` has resolved that same
-    /// id this frame, so an offscreen target's size is already known.
-    /// `resize()` drops every depth view alongside `offscreen`.
-    pub(crate) fn depth_view(&mut self, id: u32) -> &wgpu::TextureView {
+    /// id this frame, so an offscreen target's size is already known; an id
+    /// that was never resolved this frame is a clean error rather than a
+    /// `HashMap` panic. `resize()` drops every depth view alongside
+    /// `offscreen`.
+    pub(crate) fn depth_view(&mut self, id: u32) -> Result<&wgpu::TextureView> {
         if !self.depth.contains_key(&id) {
             let (width, height) = if id == 0 {
                 (self.target.width, self.target.height)
             } else {
-                let o = &self.offscreen[&id];
+                let o = self.offscreen.get(&id).with_context(|| {
+                    format!(
+                        "depth_view({id}) called before target_view/ensure_offscreen \
+                         resolved that id this frame"
+                    )
+                })?;
                 (o.width, o.height)
             };
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -368,7 +375,7 @@ impl Gpu {
             let view = texture.create_view(&Default::default());
             self.depth.insert(id, view);
         }
-        &self.depth[&id]
+        Ok(&self.depth[&id])
     }
 }
 

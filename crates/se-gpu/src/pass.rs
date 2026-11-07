@@ -63,16 +63,16 @@ pub(crate) fn resolve_depth(
     gpu: &mut crate::Gpu,
     groups: &[PassGroup],
     draw_count: usize,
-) -> (Vec<Option<wgpu::TextureView>>, Vec<bool>) {
-    let depths = groups
-        .iter()
-        .map(|g| g.depth.then(|| gpu.depth_view(g.target).clone()))
-        .collect();
+) -> Result<(Vec<Option<wgpu::TextureView>>, Vec<bool>)> {
+    let mut depths = Vec::with_capacity(groups.len());
+    for g in groups {
+        depths.push(if g.depth { Some(gpu.depth_view(g.target)?.clone()) } else { None });
+    }
     let mut draw_depth = vec![false; draw_count];
     for g in groups {
         for k in g.draws.clone() {
             draw_depth[k] = g.depth;
         }
     }
-    (depths, draw_depth)
+    Ok((depths, draw_depth))
 }

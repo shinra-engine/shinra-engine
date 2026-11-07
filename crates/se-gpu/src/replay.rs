@@ -81,7 +81,7 @@ impl Gpu {
             .iter()
             .map(|g| self.target_view(g.target).clone())
             .collect();
-        let (depths, draw_depth) = pass::resolve_depth(self, &groups, draws.len());
+        let (depths, draw_depth) = pass::resolve_depth(self, &groups, draws.len())?;
 
         // Uploads first: a render pass borrows the encoder, and a column is
         // read straight out of the arena. Each draw gets its own bytes.
