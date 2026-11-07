@@ -328,7 +328,7 @@ impl Gpu {
             // fields below.
             self.ensure_offscreen(d.sample);
             &self.offscreen[&d.sample].prev_view
-        } else if d.kind == DRAW_FULLSCREEN && d.sample != NONE {
+        } else if d.kind == DRAW_FULLSCREEN && d.sample != NONE && d.sample != 0 {
             if d.texture != NONE {
                 bail!("a draw cannot set both `texture` and `sample`")
             }
