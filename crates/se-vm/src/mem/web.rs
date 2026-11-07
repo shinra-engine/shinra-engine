@@ -13,44 +13,53 @@
 //! of the JS side is therefore not on the table; `data()` has to choose
 //! between an owned copy and a cached one.
 //!
-//! This picks the cached fixed-capacity view (candidate (b) in
-//! story-229/task-256's Target Invariant 2): `scratch` is sized once, at
-//! construction, to `memory`'s byte length, and is never resized afterward —
-//! only overwritten in place. That is sound only because this engine's arena
-//! memory is created non-growable (`vm.rs`'s native path:
-//! `MemoryType::new(pages, Some(pages))`, i.e. `min == max`); the web side
-//! must mirror that when it builds the `WebAssembly.Memory` descriptor
-//! (`initial == maximum == required_pages()`), which keeps the `ArrayBuffer`
-//! byte length — and therefore `scratch`'s length — fixed for the memory's
-//! whole lifetime. A buffer that only ever shrinks to zero capacity changes
-//! (none here, since it is never resized) never moves, so a slice into it
-//! stays valid for as long as `self` does. Candidate (a) (copy into a
-//! `Vec` rebuilt fresh each call) would have been the honest fallback if
-//! growth could happen here, but it cannot: trading an owned-copy-per-call
-//! design for a cache that cannot itself be grown on a target where growth
-//! never occurs is the one that matches how `Vm::bytes()`'s callers actually
-//! use the result (`se-gpu::replay` holds the slice across a
-//! `write_buffer` call, which an API that may reallocate out from under it
-//! mid-use would not serve any better than an owned copy would).
+//! This picks a double-buffered cache (candidate (b) in story-229/task-256's
+//! Target Invariant 2, refined by task-286's aliasing review): two
+//! fixed-capacity `Vec<u8>`s, each sized once at construction to `memory`'s
+//! byte length and never resized afterward — only overwritten in place.
+//! `data()` alternates which buffer it writes into on each call, so the
+//! `&mut` reborrow one call performs can never target the same allocation as
+//! a `&[u8]` a *different* call has already handed out and a caller may
+//! still be holding — the two allocations are entirely independent, so
+//! nothing in this type ties their Stacked-Borrows provenance together. A
+//! single shared buffer did not have that property: a second call's `&mut`
+//! reborrow of the same allocation invalidated a first call's still-live
+//! `&[u8]` under Rust's Stacked-Borrows aliasing model, which is undefined
+//! behavior if the first slice is read again afterward. This is sound only
+//! because this engine's arena memory is created non-growable (`vm.rs`'s
+//! native path: `MemoryType::new(pages, Some(pages))`, i.e. `min == max`);
+//! the web side must mirror that when it builds the `WebAssembly.Memory`
+//! descriptor (`initial == maximum == required_pages()`), which keeps the
+//! `ArrayBuffer` byte length — and therefore each buffer's length — fixed
+//! for the memory's whole lifetime. A buffer that is never resized never
+//! moves, so a slice into it stays valid for as long as `self` does.
+//! Candidate (a) (copy into a `Vec` rebuilt fresh each call) would have been
+//! the honest fallback if growth could happen here, but it cannot, and it
+//! would also violate `Mem::data`'s contract that `se-gpu::replay`'s
+//! `write_buffer` call relies on: a real borrow, not an owned copy.
 //!
-//! The remaining, weaker caveat — a `data()` call overwrites `scratch`'s
-//! *contents* in place, so a slice from an earlier call observes the later
-//! call's bytes once it returns — is the same class of risk wasmtime's own
-//! `Memory::data` already carries on native (a `memory.grow` between two
-//! live slices invalidates the earlier one); it is not a new risk this impl
-//! introduces, only one inherited from the shape of a caching `&self`-based
-//! API, and `World`/`Vm` do not yet call this impl at all (that is T-d).
+//! The residual caveat — three or more `data()` results held alive at once
+//! would see the oldest alias the buffer a later call reuses — is far
+//! narrower than the single-buffer design's hazard (any *two* overlapping
+//! calls already triggered it), and matches how every current and
+//! anticipated caller actually uses the result: at most one `data()` slice
+//! alive at a time (`Vm::bytes()`/`Vm::snapshot()` in `vm/web.rs` each do
+//! exactly one call per invocation, and `World`/`Vm` do not yet call this
+//! impl at all — that is T-d).
 
 use super::Mem;
 use anyhow::Result;
 use js_sys::Uint8Array;
-use std::cell::UnsafeCell;
+use std::cell::{Cell, UnsafeCell};
 
 pub struct WebMem {
     pub memory: js_sys::WebAssembly::Memory,
-    /// Fixed at construction to `memory`'s byte length; never resized after
-    /// that — see the module doc for why that is what makes `data()` sound.
-    scratch: UnsafeCell<Vec<u8>>,
+    /// Two buffers, each fixed at construction to `memory`'s byte length and
+    /// never resized after that. `data()` alternates which one it writes
+    /// into (tracked by `next`) — see the module doc for why that is what
+    /// makes `data()` sound against two overlapping calls.
+    scratch: [UnsafeCell<Vec<u8>>; 2],
+    next: Cell<usize>,
 }
 
 impl WebMem {
@@ -60,7 +69,11 @@ impl WebMem {
         let len = Uint8Array::new(&memory.buffer()).length() as usize;
         Self {
             memory,
-            scratch: UnsafeCell::new(vec![0u8; len]),
+            scratch: [
+                UnsafeCell::new(vec![0u8; len]),
+                UnsafeCell::new(vec![0u8; len]),
+            ],
+            next: Cell::new(0),
         }
     }
 }
@@ -80,15 +93,20 @@ impl Mem for WebMem {
     }
 
     fn data(&self) -> &[u8] {
-        // SAFETY: `scratch`'s `Vec` is sized once in `new` and never
+        // SAFETY: each call writes into the *other* buffer from the one the
+        // previous call used, so the `&mut` reborrow below never targets the
+        // same allocation as a `&[u8]` this method has already handed out
+        // and that a caller may still be holding — see the module doc for
+        // why a single shared buffer made that a Stacked-Borrows aliasing
+        // hazard. Either buffer's `Vec` is sized once in `new` and never
         // resized again (no `resize`/`push`/`shrink_to_fit` anywhere in this
         // impl), so its backing allocation never moves for the lifetime of
-        // `self`; a `&[u8]` into it tied to `&self` is therefore valid even
-        // though a later `data()` call overwrites its contents (see the
-        // module doc's caveat). `copy_to` below requires the source and
-        // destination lengths to match exactly, which holds because
-        // `memory`'s `ArrayBuffer` is non-growable (constructor contract).
-        let scratch = unsafe { &mut *self.scratch.get() };
+        // `self`. `copy_to` below requires the source and destination
+        // lengths to match exactly, which holds because `memory`'s
+        // `ArrayBuffer` is non-growable (constructor contract).
+        let idx = self.next.get();
+        self.next.set(1 - idx);
+        let scratch = unsafe { &mut *self.scratch[idx].get() };
         Uint8Array::new(&self.memory.buffer()).copy_to(scratch);
         scratch
     }
