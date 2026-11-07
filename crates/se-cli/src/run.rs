@@ -121,6 +121,9 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
     // Holds the last drawn frame so a skipped render redraws it instead of a
     // blank one.
     let mut picture: Vec<u8> = Vec::new();
+    // Size `picture` matches, lagging `screen` till a reply arrives for it.
+    let mut shown = (0u32, 0u32);
+    let mut inflight_screen: Option<(u32, u32)> = None;
     // No real audio device exists to target yet; see audio.rs.
     let mut audio_sink = HeadlessSink::default();
 
@@ -258,7 +261,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         // (a full channel) instead of a guess about render cost.
         match command::read(&live.vm.meta, live.vm.bytes()) {
             Ok((cmds, _)) => {
-                live.render.try_send_snapshot(live.vm.meta.clone(), live.vm.world.clone(), live.vm.bytes().to_vec(), cmds);
+                let sent = live.render.try_send_snapshot(live.vm.meta.clone(), live.vm.world.clone(), live.vm.bytes().to_vec(), cmds);
+                inflight_screen = if sent { Some(screen) } else { inflight_screen };
             }
             Err(e) => ide.note(format!("commands: {e:#}")),
         }
@@ -266,6 +270,7 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
             Some(RenderReply::Picture(p)) => {
                 live.cache_render();
                 picture = p;
+                shown = inflight_screen.take().unwrap_or(shown);
             }
             Some(RenderReply::TimedOut) => handle_render_timeout(&mut live, &mut ide),
             Some(RenderReply::Failed(e)) => {
@@ -294,8 +299,8 @@ pub fn run(mut deck: Deck, opt: Options) -> Result<()> {
         project_ids = ids;
         ide.clamp_project();
 
-        let shown = Pixels { width: screen.0, height: screen.1, rgba: &picture };
-        rt.draw(|f| areas = se_tui::draw(f, &ide, Some(&shown)))?;
+        let frame = Pixels { width: shown.0, height: shown.1, rgba: &picture };
+        rt.draw(|f| areas = se_tui::draw(f, &ide, Some(&frame)))?;
 
         if opt.frames.is_some_and(|n| index >= n) {
             break;
