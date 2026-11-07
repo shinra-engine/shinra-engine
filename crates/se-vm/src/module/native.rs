@@ -13,6 +13,7 @@
 //! without `--import-memory`, and everything it writes would land somewhere
 //! the host never reads. That failure is silent, so it is caught at load.
 
+use super::common::check_contract_id;
 use crate::memory::Slot;
 use anyhow::{bail, Context, Result};
 use wasmtime::{
@@ -132,22 +133,6 @@ fn check_entry(name: &str, slot: Slot, m: &WasmModule) -> Result<()> {
             "`{name}` exports no {shown} -> u32; the {} slot calls it every frame",
             slot.name()
         )
-    }
-    Ok(())
-}
-
-/// A module is only ever meaningful against the contract it was built from:
-/// every offset in it came from that table. The id rides in a section that
-/// `shinra build` writes, so it is read from the file, before anything runs.
-pub fn check_contract_id(name: &str, bytes: &[u8], want: u64) -> Result<()> {
-    let Ok(found) = se_contract::wasm::section(bytes, se_contract::table::CONTRACT_ID_SECTION)
-    else {
-        bail!("`{name}` carries no contract id; it was not built by `shinra build` against this contract")
-    };
-    if found != want.to_le_bytes() {
-        let got = <[u8; 8]>::try_from(found).map(u64::from_le_bytes);
-        let shown = got.map_or_else(|_| "malformed".to_string(), |g| format!("{g:016x}"));
-        bail!("`{name}` was built against contract {shown}; this world is {want:016x} — run `shinra build`")
     }
     Ok(())
 }

@@ -20,12 +20,14 @@
 //! two implementations and nothing else; the `cfg(target_arch)` lives on
 //! each `pub mod`, not on this file.
 
+pub mod common;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod native;
 #[cfg(target_arch = "wasm32")]
 pub mod web;
 
+pub use common::check_contract_id;
 #[cfg(not(target_arch = "wasm32"))]
-pub use native::{check_contract_id, with_budget, Loaded, Prepared, DEFAULT_FUEL};
+pub use native::{with_budget, Loaded, Prepared, DEFAULT_FUEL};
 #[cfg(target_arch = "wasm32")]
-pub use web::{check_contract_id, Loaded, Prepared};
+pub use web::{Loaded, Prepared};
