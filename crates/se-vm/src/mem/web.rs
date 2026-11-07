@@ -48,7 +48,7 @@
 //! impl at all — that is T-d).
 
 use super::Mem;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use js_sys::Uint8Array;
 use std::cell::{Cell, UnsafeCell};
 
@@ -81,13 +81,21 @@ impl WebMem {
 impl Mem for WebMem {
     fn read(&self, at: u32, len: u32) -> Result<Vec<u8>> {
         let view = Uint8Array::new(&self.memory.buffer());
+        let end = (at as u64)
+            .checked_add(len as u64)
+            .filter(|&end| end <= view.length() as u64)
+            .ok_or_else(|| anyhow!("WebMem::read out of bounds: at={at} len={len}"))?;
         let mut v = vec![0u8; len as usize];
-        view.subarray(at, at + len).copy_to(&mut v);
+        view.subarray(at, end as u32).copy_to(&mut v);
         Ok(v)
     }
 
     fn write(&mut self, at: u32, bytes: &[u8]) -> Result<()> {
         let view = Uint8Array::new(&self.memory.buffer());
+        (at as u64)
+            .checked_add(bytes.len() as u64)
+            .filter(|&end| end <= view.length() as u64)
+            .ok_or_else(|| anyhow!("WebMem::write out of bounds: at={at} len={}", bytes.len()))?;
         view.set(&Uint8Array::from(bytes), at);
         Ok(())
     }
