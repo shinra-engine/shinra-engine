@@ -20,6 +20,7 @@ pub mod sound;
 pub mod stages;
 pub mod world;
 
+mod blob;
 mod control;
 mod rollback;
 mod vm;
