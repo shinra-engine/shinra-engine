@@ -72,14 +72,18 @@ interface render {
     /// Asset id of the texture to bind, or `u32::MAX` for none.
     texture: u32,
     clear-r: f32, clear-g: f32, clear-b: f32, clear-a: f32,
-    /// Render target this pass draws into: 0 = present, non-zero names an
-    /// offscreen target. Not yet acted on by replay — every pass still
-    /// targets present.
+    /// Render target this pass draws into: 0 = present, 1..=8 name an
+    /// offscreen target, created lazily at the present target's size the
+    /// first time a command names it.
     target: u32,
-    /// Target id to sample from an earlier pass this frame, or 0 for none.
-    /// Not yet acted on by replay.
+    /// Target id a `DRAW_FULLSCREEN` samples from, or 0 for none: by default
+    /// an earlier pass this same frame wrote; with `FLAG_PREV` set, that
+    /// target's content from last frame instead (0, the present target,
+    /// keeps no history).
     sample: u32,
-    /// Reserved.
+    /// Bit 0 (`FLAG_DEPTH`): attach a depth buffer to this `BEGIN_PASS`. Bit
+    /// 1 (`FLAG_PREV`): a draw's `sample` reads last frame's content for
+    /// that target instead of this frame's. Other bits reserved.
     render-flags: u32,
   }
 

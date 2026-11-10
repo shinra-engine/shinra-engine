@@ -69,11 +69,13 @@ pub struct Command {
     /// Asset id of the texture, or `NONE`.
     pub texture: u32,
     pub clear: [f32; 4],
-    /// Render target this pass draws into: 0 = present, non-zero names an
-    /// offscreen target. Not yet acted on by replay.
+    /// Render target this pass draws into: 0 = present, 1..=8 name an
+    /// offscreen target, created lazily at the present target's size the
+    /// first time a command names it.
     pub target: u32,
-    /// Target id to sample from an earlier pass this frame, or 0 for none.
-    /// Not yet acted on by replay.
+    /// Target id a `DRAW_FULLSCREEN` samples from, or 0 for none: by default
+    /// an earlier pass this same frame wrote; with `FLAG_PREV` set, that
+    /// target's content from last frame instead.
     pub sample: u32,
     /// Bit 0 (`FLAG_DEPTH`) requests a depth attachment for a `BEGIN_PASS`;
     /// bit 1 (`FLAG_PREV`) makes a draw's `sample` read that target's
